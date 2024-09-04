@@ -80,6 +80,8 @@ impl From<ErrorCode> for IMStatusCode {
             ErrorCode::Busy => IMStatusCode::Busy,
             ErrorCode::DataVersionMismatch => IMStatusCode::DataVersionMismatch,
             ErrorCode::ResourceExhausted => IMStatusCode::ResourceExhausted,
+            ErrorCode::FailSafeRequired => IMStatusCode::FailSafeRequired,
+            ErrorCode::ConstraintError => IMStatusCode::ConstraintError,
             _ => IMStatusCode::Failure,
         }
     }

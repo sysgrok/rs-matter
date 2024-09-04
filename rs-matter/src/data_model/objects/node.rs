@@ -374,7 +374,7 @@ where
     items: Option<I>,
     /// The current path item being expanded.
     item: Option<T>,
-    /// The current endpoint index if the path is a wildcard one.
+    /// The current endpoint index.
     /// Might not yet be computed (UNKNOWN_INDEX).
     endpoint_index: u32,
     /// The current cluster index.
