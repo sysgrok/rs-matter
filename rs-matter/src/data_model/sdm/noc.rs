@@ -230,21 +230,19 @@ impl NocCluster {
                     Attributes::CurrentFabricIndex(codec) => codec.encode(writer, attr.fab_idx),
                     Attributes::Fabrics(_) => {
                         writer.start_array(&AttrDataWriter::TAG)?;
-                        exchange
-                            .matter()
-                            .fabric_mgr
-                            .borrow()
-                            .for_each(|entry, fab_idx| {
-                                if !attr.fab_filter || attr.fab_idx == fab_idx.get() {
-                                    let root_ca_cert = entry.get_root_ca()?;
+                        for fabric in exchange.matter().fabric_mgr.borrow().iter() {
+                            if (!attr.fab_filter || attr.fab_idx == fabric.fab_idx().get())
+                                && !fabric.root_ca().is_empty()
+                            {
+                                // Empty `root_ca` might happen in the E2E tests
+                                let root_ca_cert = CertRef::new(TLVElement::new(fabric.root_ca()));
 
-                                    entry
-                                        .get_fabric_desc(fab_idx, &root_ca_cert)?
-                                        .to_tlv(&TLVTag::Anonymous, &mut *writer)?;
-                                }
+                                fabric
+                                    .get_fabric_desc(&root_ca_cert)?
+                                    .to_tlv(&TLVTag::Anonymous, &mut *writer)?;
+                            }
+                        }
 
-                                Ok(())
-                            })?;
                         writer.end_container()?;
 
                         writer.complete()

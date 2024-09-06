@@ -15,7 +15,9 @@
  *    limitations under the License.
  */
 
+use core::future::Future;
 use core::pin::pin;
+
 use std::net::UdpSocket;
 
 use embassy_futures::select::{select, select4};
@@ -41,7 +43,7 @@ use rs_matter::secure_channel::spake2p::VerifierData;
 use rs_matter::transport::core::MATTER_SOCKET_BIND_ADDR;
 use rs_matter::utils::init::InitMaybeUninit;
 use rs_matter::utils::select::Coalesce;
-use rs_matter::utils::storage::pooled::PooledBuffers;
+use rs_matter::utils::storage::pooled::{BufferAccess, PooledBuffers};
 use rs_matter::MATTER_PORT;
 use static_cell::StaticCell;
 
@@ -128,7 +130,7 @@ fn run() -> Result<(), Error> {
     // All other subscription requests will be turned down with "resource exhausted"
     let responder = DefaultResponder::new(&matter, buffers, &subscriptions, dm_handler);
     info!(
-        "Responder memory: Responder={}B, Runner={}B",
+        "Responder memory: Responder (stack)={}B, Runner fut (stack)={}B",
         core::mem::size_of_val(&responder),
         core::mem::size_of_val(&responder.run::<4, 4>())
     );
@@ -136,6 +138,7 @@ fn run() -> Result<(), Error> {
     // Run the responder with up to 4 handlers (i.e. 4 exchanges can be handled simultenously)
     // Clients trying to open more exchanges than the ones currently running will get "I'm busy, please try again later"
     let mut respond = pin!(responder.run::<4, 4>());
+    //let mut respond = responder_fut(responder);
 
     // This is a sample code that simulates state changes triggered by the HAL
     // Changes will be properly communicated to the Matter controllers and other Matter apps (i.e. Google Home, Alexa), thanks to subscriptions
@@ -188,6 +191,15 @@ fn run() -> Result<(), Error> {
     // Replace with a different executor for e.g. `no_std` environments
     futures_lite::future::block_on(all.coalesce())
 }
+
+// #[inline(never)]
+// pub fn responder_fut<const N: usize, B, T>(responder: &'static DefaultResponder<N, B, T>) -> Box<impl Future<Output = Result<(), Error>>>
+// where
+//     B: BufferAccess<IMBuffer>,
+//     T: DataModelHandler,
+// {
+//     Box::new(responder.run::<4, 4>())
+// }
 
 const NODE: Node<'static> = Node {
     id: 0,
