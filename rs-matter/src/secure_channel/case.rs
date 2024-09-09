@@ -147,14 +147,11 @@ impl Case {
                     .initiator_icac
                     .map(|icac| CertRef::new(TLVElement::new(icac.0)));
 
-                let mut validate_certs_buf = alloc!([0; 800]); // TODO LARGE BUFFER
-                let validate_certs_buf = &mut validate_certs_buf[..];
-                if let Err(e) = Case::validate_certs(
-                    fabric,
-                    &initiator_noc,
-                    initiator_icac.as_ref(),
-                    validate_certs_buf,
-                ) {
+                let mut buf = alloc!([0; 800]); // TODO LARGE BUFFER
+                let buf = &mut buf[..];
+                if let Err(e) =
+                    Case::validate_certs(fabric, &initiator_noc, initiator_icac.as_ref(), buf)
+                {
                     error!("Certificate Chain doesn't match: {}", e);
                     SCStatusCodes::InvalidParameter
                 } else if let Err(e) = Case::validate_sigma3_sign(
@@ -163,6 +160,7 @@ impl Case {
                     &initiator_noc,
                     d.signature.0,
                     case_session,
+                    buf,
                 ) {
                     error!("Sigma3 Signature doesn't match: {}", e);
                     SCStatusCodes::InvalidParameter
@@ -352,10 +350,9 @@ impl Case {
         initiator_noc_cert: &CertRef,
         sign: &[u8],
         case_session: &CaseSession,
+        buf: &mut [u8],
     ) -> Result<(), Error> {
-        const MAX_TBS_SIZE: usize = 800;
-        let mut buf = [0; MAX_TBS_SIZE];
-        let mut write_buf = WriteBuf::new(&mut buf);
+        let mut write_buf = WriteBuf::new(buf);
         let tw = &mut write_buf;
         tw.start_struct(&TLVTag::Anonymous)?;
         tw.str(&TLVTag::Context(1), initiator_noc)?;
