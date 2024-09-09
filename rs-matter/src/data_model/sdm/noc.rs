@@ -380,8 +380,8 @@ impl NocCluster {
 
         let mut added_fab_idx = 0;
 
-        let mut buf = alloc!([0; 800]); // TODO LARGE BUFFER
-        let buf = &mut buf[..];
+        let mut buf = alloc!(MaybeUninit::<[u8; 800]>::uninit()); // TODO LARGE BUFFER
+        let buf = unsafe { buf.assume_init_mut() };
 
         let status = NocStatus::map(exchange.with_session(|sess| {
             let fab_idx = exchange.matter().failsafe.borrow_mut().add_noc(

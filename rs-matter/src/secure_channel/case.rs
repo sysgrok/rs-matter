@@ -127,7 +127,8 @@ impl Case {
                 let root = get_root_node_struct(exchange.rx()?.payload())?;
                 let encrypted = root.structure()?.ctx(1)?.str()?;
 
-                let mut decrypted = alloc!([0; 800]); // TODO LARGE BUFFER
+                let mut decrypted = alloc!(MaybeUninit::<[u8; 800]>::uninit()); // TODO LARGE BUFFER
+                let decrypted = unsafe { decrypted.assume_init_mut() };
                 if encrypted.len() > decrypted.len() {
                     error!("Data too large");
                     Err(ErrorCode::NoSpace)?;
@@ -147,8 +148,8 @@ impl Case {
                     .initiator_icac
                     .map(|icac| CertRef::new(TLVElement::new(icac.0)));
 
-                let mut buf = alloc!([0; 800]); // TODO LARGE BUFFER
-                let buf = &mut buf[..];
+                let mut buf = alloc!(MaybeUninit::<[u8; 800]>::uninit()); // TODO LARGE BUFFER
+                let buf = unsafe { buf.assume_init_mut() };
                 if let Err(e) =
                     Case::validate_certs(fabric, &initiator_noc, initiator_icac.as_ref(), buf)
                 {
