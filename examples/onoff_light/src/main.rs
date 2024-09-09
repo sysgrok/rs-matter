@@ -15,7 +15,6 @@
  *    limitations under the License.
  */
 
-use core::future::Future;
 use core::pin::pin;
 
 use std::net::UdpSocket;
@@ -43,7 +42,7 @@ use rs_matter::secure_channel::spake2p::VerifierData;
 use rs_matter::transport::core::MATTER_SOCKET_BIND_ADDR;
 use rs_matter::utils::init::InitMaybeUninit;
 use rs_matter::utils::select::Coalesce;
-use rs_matter::utils::storage::pooled::{BufferAccess, PooledBuffers};
+use rs_matter::utils::storage::pooled::PooledBuffers;
 use rs_matter::MATTER_PORT;
 use static_cell::StaticCell;
 
