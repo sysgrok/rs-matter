@@ -26,7 +26,7 @@ use crate::interaction_model::messages::GenericPath;
 use crate::tlv::{EitherIter, FromTLV, Nullable, TLVElement, TLVTag, TLVWrite, ToTLV, TLV};
 use crate::transport::session::{Session, SessionMode, MAX_CAT_IDS_PER_NOC};
 use crate::utils::cell::RefCell;
-use crate::utils::init::{init, ApplyInit, Init};
+use crate::utils::init::{init, Init};
 use crate::utils::storage::Vec;
 
 /// Max subjects per ACL entry
@@ -357,10 +357,7 @@ impl AclEntry {
 
     pub fn add_target(&mut self, target: Target) -> Result<(), Error> {
         if self.targets.is_none() {
-            // unwrap is OK because we are Infallible
-            Nullable::init_some(Vec::init())
-                .apply(&mut self.targets)
-                .unwrap();
+            self.targets.reinit(Nullable::init_some(Vec::init()));
         }
 
         self.targets
