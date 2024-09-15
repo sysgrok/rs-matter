@@ -329,6 +329,13 @@ impl FailSafe {
             })?
             .fab_idx();
 
+        let State::Armed(ctx) = &mut self.state else {
+            // Impossible to be in any other state because otherwise
+            // check_state would have failed
+            unreachable!();
+        };
+
+        ctx.fab_idx = fab_idx.get();
         self.add_flags(NocFlags::ADD_NOC_RECVD);
 
         Ok(fab_idx)
