@@ -15,8 +15,10 @@
  *    limitations under the License.
  */
 
+use core::cell::UnsafeCell;
 use core::convert::Infallible;
-use core::{cell::UnsafeCell, mem::MaybeUninit};
+use core::fmt::Debug;
+use core::mem::MaybeUninit;
 
 /// Re-export `pinned-init` because its API is very unstable currently (0.0.x)
 pub use pinned_init::*;
@@ -46,24 +48,59 @@ pub trait IntoFallibleInit<T>: Init<T, Infallible> {
 
 impl<T, I> IntoFallibleInit<T> for I where I: Init<T, Infallible> {}
 
+/// An extension trait for converting `Init<T, E>` to an infallible `Init<T, Infallible>`.
+/// Useful when the upstream code can **guarantee**, that there will be no errors during the initialization.
+///
+/// If any errors occur, the resulting infallible initializer will panic.
+pub trait IntoInfallibleInit<T, E: Debug>: Init<T, E> {
+    /// Convert the fallible initializer to an infallible one.
+    fn into_infallible(self) -> impl Init<T> {
+        unsafe {
+            init_from_closure(move |slot| {
+                Self::__init(self, slot).unwrap();
+
+                Ok(())
+            })
+        }
+    }
+}
+
+impl<T, E: Debug, I> IntoInfallibleInit<T, E> for I where I: Init<T, E> {}
+
+/// An extension trait for updating a type using an infallible initializer.
+pub trait ApplyInit<T>: Init<T> {
+    fn apply(self, to: &mut T) {
+        unsafe {
+            let to = to as *mut T;
+
+            // We can drop in place because we are sure that the following update
+            // will not panic
+            core::ptr::drop_in_place(to);
+
+            // Unwrapping should not panic because the initializer is an infallible one
+            Self::__init(self, to).unwrap();
+        }
+    }
+}
+
+impl<T, I> ApplyInit<T> for I where I: Init<T> {}
+
 /// An extension trait for retrofitting `UnsafeCell` with an initializer.
 pub trait UnsafeCellInit<T> {
     /// Create a new in-place initializer for `UnsafeCell`
     /// by using the given initializer for the value.
-    fn init<I: Init<T>>(value: I) -> impl Init<Self>;
+    fn init<I: Init<T, E>, E>(value: I) -> impl Init<Self, E>;
 }
 
 impl<T> UnsafeCellInit<T> for UnsafeCell<T> {
-    fn init<I: Init<T>>(value: I) -> impl Init<Self> {
+    fn init<I: Init<T, E>, E>(value: I) -> impl Init<Self, E> {
         unsafe {
-            init_from_closure::<_, Infallible>(move |slot: *mut Self| {
+            init_from_closure::<_, E>(move |slot: *mut Self| {
                 // `slot` contains uninit memory, avoid creating a reference.
                 let slot: *mut T = slot as _;
 
                 // Initialize the value
-                value.__init(slot).unwrap();
-
-                Ok(())
+                value.__init(slot)
             })
         }
     }
