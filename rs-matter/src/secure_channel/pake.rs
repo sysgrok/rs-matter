@@ -276,13 +276,15 @@ impl Pake {
 
         let status = match result {
             Ok(()) => {
-                let mdns = &exchange.matter().transport_mgr.mdns;
+                // TODO: Temnporarily comment out the PASE session disabling
+                // until we figure out why it breaks commissioning
+                // let mdns = &exchange.matter().transport_mgr.mdns;
 
-                exchange
-                    .matter()
-                    .pase_mgr
-                    .borrow_mut()
-                    .disable_pase_session(mdns)?;
+                // exchange
+                //     .matter()
+                //     .pase_mgr
+                //     .borrow_mut()
+                //     .disable_pase_session(mdns)?;
 
                 // Complete the reserved session and thus make the `Session` instance
                 // immediately available for use by the system.
