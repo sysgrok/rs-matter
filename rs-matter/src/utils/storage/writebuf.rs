@@ -15,7 +15,7 @@
  *    limitations under the License.
  */
 
-use crate::error::*;
+use crate::{err, error::*};
 use byteorder::{ByteOrder, LittleEndian};
 
 #[derive(Debug)]
@@ -78,7 +78,7 @@ impl<'a> WriteBuf<'a> {
 
     pub fn load(&mut self, wb: &WriteBuf) -> Result<(), Error> {
         if self.buf_size < wb.end {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
 
         self.buf[0..wb.end].copy_from_slice(&wb.buf[..wb.end]);
@@ -92,7 +92,7 @@ impl<'a> WriteBuf<'a> {
         if self.end != 0 || self.start != 0 || self.buf_size != self.buf.len() {
             Err(ErrorCode::Invalid.into())
         } else if reserve > self.buf_size {
-            Err(ErrorCode::NoSpace.into())
+            Err(err!(NoSpace))
         } else {
             self.start = reserve;
             self.end = reserve;
@@ -105,7 +105,7 @@ impl<'a> WriteBuf<'a> {
             self.buf_size -= with;
             Ok(())
         } else {
-            Err(ErrorCode::NoSpace.into())
+            Err(err!(NoSpace))
         }
     }
 
@@ -114,7 +114,7 @@ impl<'a> WriteBuf<'a> {
             self.buf_size += by;
             Ok(())
         } else {
-            Err(ErrorCode::NoSpace.into())
+            Err(err!(NoSpace))
         }
     }
 
@@ -127,7 +127,7 @@ impl<'a> WriteBuf<'a> {
             self.start -= size;
             return Ok(());
         }
-        Err(ErrorCode::NoSpace.into())
+        Err(err!(NoSpace))
     }
 
     pub fn prepend(&mut self, src: &[u8]) -> Result<(), Error> {
@@ -156,7 +156,7 @@ impl<'a> WriteBuf<'a> {
             self.end += size;
             return Ok(());
         }
-        Err(ErrorCode::NoSpace.into())
+        Err(err!(NoSpace))
     }
 
     pub fn append(&mut self, src: &[u8]) -> Result<(), Error> {

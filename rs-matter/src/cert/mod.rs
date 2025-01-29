@@ -23,6 +23,7 @@ use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
 use crate::crypto::KeyPair;
+use crate::err;
 use crate::error::{Error, ErrorCode};
 use crate::tlv::{FromTLV, Octets, TLVArray, TLVElement, TLVList, ToTLV};
 use crate::utils::epoch::MATTER_CERT_DOESNT_EXPIRE;
@@ -617,7 +618,7 @@ impl<'a> CertRef<'a> {
 
             if dn.tag()? == DNTag::NocCat {
                 if offset == output.len() {
-                    Err(ErrorCode::NoSpace)?;
+                    Err(err!(NoSpace))?;
                 }
 
                 output[offset] = dn.uint()? as u32;

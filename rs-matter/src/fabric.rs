@@ -27,6 +27,7 @@ use crate::acl::{self, AccessReq, AclEntry, AuthMode};
 use crate::cert::{CertRef, MAX_CERT_TLV_LEN};
 use crate::crypto::{self, hkdf_sha256, HmacSha256, KeyPair};
 use crate::data_model::objects::Privilege;
+use crate::err;
 use crate::error::{Error, ErrorCode};
 use crate::group_keys::KeySet;
 use crate::mdns::{Mdns, ServiceMode};
@@ -132,13 +133,13 @@ impl Fabric {
 
         self.root_ca
             .extend_from_slice(root_ca)
-            .map_err(|_| ErrorCode::NoSpace)?;
+            .map_err(|_| err!(NoSpace))?;
         self.icac
             .extend_from_slice(icac)
-            .map_err(|_| ErrorCode::NoSpace)?;
+            .map_err(|_| err!(NoSpace))?;
         self.noc
             .extend_from_slice(noc)
-            .map_err(|_| ErrorCode::NoSpace)?;
+            .map_err(|_| err!(NoSpace))?;
 
         let noc_p = CertRef::new(TLVElement::new(noc));
 
@@ -179,7 +180,7 @@ impl Fabric {
                         e.fab_idx = Some(self.fab_idx);
                         e.add_subject(case_admin_subject)
                     }),
-                || ErrorCode::NoSpace.into(),
+                || err!(NoSpace),
             )?;
         }
 
@@ -202,7 +203,7 @@ impl Fabric {
         if id.as_slice() == target {
             Ok(())
         } else {
-            Err(ErrorCode::NotFound.into())
+            Err(err!(NotFound))
         }
     }
 
@@ -286,13 +287,13 @@ impl Fabric {
     fn acl_add(&mut self, mut entry: AclEntry) -> Result<usize, Error> {
         if entry.auth_mode() == AuthMode::Pase {
             // Reserved for future use
-            Err(ErrorCode::ConstraintError)?;
+            Err(err!(ConstraintError))?;
         }
 
         // Overwrite the fabric index with our accessing fabric index
         entry.fab_idx = Some(self.fab_idx);
 
-        self.acl.push(entry).map_err(|_| ErrorCode::NoSpace)?;
+        self.acl.push(entry).map_err(|_| err!(NoSpace))?;
 
         Ok(self.acl.len() - 1)
     }
@@ -300,7 +301,7 @@ impl Fabric {
     /// Update an existing ACL entry in the fabric
     fn acl_update(&mut self, idx: usize, mut entry: AclEntry) -> Result<(), Error> {
         if self.acl.len() <= idx {
-            return Err(ErrorCode::NotFound.into());
+            return Err(err!(NotFound));
         }
 
         // Overwrite the fabric index with our accessing fabric index
@@ -364,7 +365,7 @@ impl Fabric {
             &COMPRESSED_FABRIC_ID_INFO,
             out,
         )
-        .map_err(|_| Error::from(ErrorCode::NoSpace))
+        .map_err(|_| err!(NoSpace))
     }
 }
 
@@ -420,7 +421,7 @@ impl FabricMgr {
             let entry = entry?;
 
             self.fabrics
-                .push_init(Fabric::init_from_tlv(entry), || ErrorCode::NoSpace.into())?;
+                .push_init(Fabric::init_from_tlv(entry), || err!(NoSpace))?;
         }
 
         for fabric in &self.fabrics {
@@ -448,7 +449,7 @@ impl FabricMgr {
         for fabric in self.iter() {
             fabric
                 .to_tlv(&TagType::Anonymous, &mut wb)
-                .map_err(|_| ErrorCode::NoSpace)?;
+                .map_err(|_| err!(NoSpace))?;
         }
 
         wb.end_container()?;
@@ -491,7 +492,7 @@ impl FabricMgr {
             let Some(fab_idx) = (1..u8::MAX)
                 .find(|fab_idx| self.iter().all(|fabric| fabric.fab_idx().get() != *fab_idx))
             else {
-                return Err(ErrorCode::NoSpace.into());
+                return Err(err!(NoSpace));
             };
 
             fab_idx
@@ -502,7 +503,7 @@ impl FabricMgr {
             Fabric::init(fab_idx, key_pair)
                 .into_fallible::<Error>()
                 .chain(post_init),
-            || ErrorCode::NoSpace.into(),
+            || err!(NoSpace),
         )?;
 
         let fabric = self.fabrics.last_mut().unwrap();
@@ -585,7 +586,7 @@ impl FabricMgr {
         fabric
             .label
             .push_str(label)
-            .map_err(|_| ErrorCode::NoSpace)?;
+            .map_err(|_| err!(NoSpace))?;
 
         Ok(())
     }

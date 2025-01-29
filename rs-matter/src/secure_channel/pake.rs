@@ -19,7 +19,7 @@ use core::{fmt::Write, time::Duration};
 
 use log::{error, info};
 
-use crate::crypto;
+use crate::{crypto, err};
 use crate::error::{Error, ErrorCode};
 use crate::mdns::{Mdns, ServiceMode};
 use crate::secure_channel::common::{complete_with_status, OpCode};
@@ -249,7 +249,7 @@ impl Pake {
             let ke = ke.ok_or(ErrorCode::Invalid)?;
             let mut session_keys: [u8; 48] = [0; 48];
             crypto::hkdf_sha256(&[], ke, SPAKE2_SESSION_KEYS_INFO, &mut session_keys)
-                .map_err(|_x| ErrorCode::NoSpace)?;
+                .map_err(|_x| err!(NoSpace))?;
 
             // Create a session
             let data = spake2p.get_app_data();

@@ -21,7 +21,7 @@ use core::time::Duration;
 
 use log::{error, info, trace, warn};
 
-use crate::error::*;
+use crate::{err, error::*};
 use crate::transport::exchange::ExchangeId;
 use crate::transport::mrp::ReliableMessage;
 use crate::utils::cell::RefCell;
@@ -282,7 +282,7 @@ impl Session {
 
                 Ok(true)
             } else {
-                Err(ErrorCode::NoSpaceExchanges)?
+                Err(err!(NoSpaceExchanges))?
             }
         }
     }
@@ -668,7 +668,7 @@ impl SessionMgr {
 
         self.sessions
             .push_init(session.into_fallible::<Error>(), || {
-                ErrorCode::NoSpaceSessions.into()
+                err!(NoSpaceSessions)
             })?;
 
         Ok(self.sessions.last_mut().unwrap())

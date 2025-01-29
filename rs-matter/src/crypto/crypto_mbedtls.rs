@@ -38,6 +38,7 @@ use crate::{
     cert::{ASN1Writer, CertConsumer},
     error::{Error, ErrorCode},
     utils::rand::Rand,
+    err,
 };
 
 pub struct HmacSha256 {
@@ -183,7 +184,7 @@ impl KeyPair {
         let mut ctr_drbg = CtrDrbg::new(Arc::new(OsEntropy::new()), None)?;
 
         if signature.len() < super::EC_SIGNATURE_LEN_BYTES {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
         safemem::write_bytes(signature, 0);
 

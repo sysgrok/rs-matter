@@ -20,6 +20,7 @@ use core::{fmt::Display, num::NonZeroU8};
 use num_derive::FromPrimitive;
 
 use crate::data_model::objects::{Access, ClusterId, EndptId, Privilege};
+use crate::err;
 use crate::error::{Error, ErrorCode};
 use crate::fabric::FabricMgr;
 use crate::interaction_model::messages::GenericPath;
@@ -124,7 +125,7 @@ impl AccessorSubjects {
                 return Ok(());
             }
         }
-        Err(ErrorCode::NoSpace.into())
+        Err(err!(NoSpace))
     }
 
     /// Match the match_subject with any of the current subjects
@@ -352,7 +353,7 @@ impl AclEntry {
     pub fn add_subject(&mut self, subject: u64) -> Result<(), Error> {
         self.subjects
             .push(subject)
-            .map_err(|_| ErrorCode::NoSpace.into())
+            .map_err(|_| err!(NoSpace))
     }
 
     pub fn add_subject_catid(&mut self, cat_id: u32) -> Result<(), Error> {
@@ -368,7 +369,7 @@ impl AclEntry {
             .as_mut()
             .unwrap()
             .push(target)
-            .map_err(|_| ErrorCode::NoSpace.into())
+            .map_err(|_| err!(NoSpace))
     }
 
     pub fn auth_mode(&self) -> AuthMode {

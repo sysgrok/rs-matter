@@ -93,6 +93,13 @@ pub enum ErrorCode {
     NocInvalidFabricIndex,
 }
 
+#[macro_export]
+macro_rules! err {
+    ($code:ident) => {
+        Error::new_loc($crate::error::ErrorCode::$code, file!(), line!())
+    };
+}
+
 impl From<ErrorCode> for Error {
     fn from(code: ErrorCode) -> Self {
         Self::new(code)
@@ -101,6 +108,7 @@ impl From<ErrorCode> for Error {
 
 pub struct Error {
     code: ErrorCode,
+    location: Option<(&'static str, u32)>,
     #[cfg(all(feature = "std", feature = "backtrace"))]
     backtrace: std::backtrace::Backtrace,
     #[cfg(all(feature = "std", feature = "backtrace"))]
@@ -108,9 +116,21 @@ pub struct Error {
 }
 
 impl Error {
+    pub fn new_loc(code: ErrorCode, file: &'static str, line: u32) -> Self {
+        Self {
+            code,
+            location: Some((file, line)),
+            #[cfg(all(feature = "std", feature = "backtrace"))]
+            backtrace: std::backtrace::Backtrace::capture(),
+            #[cfg(all(feature = "std", feature = "backtrace"))]
+            inner: None,
+        }
+    }
+
     pub fn new(code: ErrorCode) -> Self {
         Self {
             code,
+            location: None,
             #[cfg(all(feature = "std", feature = "backtrace"))]
             backtrace: std::backtrace::Backtrace::capture(),
             #[cfg(all(feature = "std", feature = "backtrace"))]
@@ -125,6 +145,7 @@ impl Error {
     ) -> Self {
         Self {
             code,
+            location: None,
             #[cfg(all(feature = "std", feature = "backtrace"))]
             backtrace: std::backtrace::Backtrace::capture(),
             #[cfg(all(feature = "std", feature = "backtrace"))]
@@ -290,7 +311,11 @@ impl fmt::Display for Error {
         }
         #[cfg(not(all(feature = "std", feature = "backtrace")))]
         {
-            write!(f, "{:?}", self.code())
+            if let Some((file, line)) = self.location {
+                write!(f, "{:?} at {}:{}", self.code(), file, line)
+            } else {
+                write!(f, "{:?}", self.code())
+            }
         }
     }
 }

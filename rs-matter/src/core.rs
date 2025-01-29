@@ -17,10 +17,10 @@
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
-use crate::data_model::{
+use crate::{data_model::{
     cluster_basic_information::BasicInfoConfig,
     sdm::{dev_att::DevAttDataFetcher, failsafe::FailSafe},
-};
+}, err};
 use crate::error::*;
 use crate::fabric::FabricMgr;
 use crate::mdns::MdnsService;
@@ -302,7 +302,7 @@ impl<'a> Matter<'a> {
         timeout_secs: u16,
     ) -> Result<(), Error> {
         let buf_access = PacketBufferExternalAccess(&self.transport_mgr.rx);
-        let mut buf = buf_access.get().await.ok_or(ErrorCode::NoSpace)?;
+        let mut buf = buf_access.get().await.ok_or(err!(NoSpace))?;
 
         self.pase_mgr.borrow_mut().enable_basic_pase_session(
             self.dev_comm.password,

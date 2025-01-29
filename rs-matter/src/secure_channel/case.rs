@@ -20,22 +20,14 @@ use core::{mem::MaybeUninit, num::NonZeroU8};
 use log::{error, trace};
 
 use crate::{
-    alloc,
-    cert::CertRef,
-    crypto::{self, KeyPair, Sha256},
-    error::{Error, ErrorCode},
-    fabric::Fabric,
-    secure_channel::common::{complete_with_status, sc_write, OpCode, SCStatusCodes},
-    tlv::{get_root_node_struct, FromTLV, OctetStr, TLVElement, TLVTag, TLVWrite},
-    transport::{
+    alloc, cert::CertRef, crypto::{self, KeyPair, Sha256}, err, error::{Error, ErrorCode}, fabric::Fabric, secure_channel::common::{complete_with_status, sc_write, OpCode, SCStatusCodes}, tlv::{get_root_node_struct, FromTLV, OctetStr, TLVElement, TLVTag, TLVWrite}, transport::{
         exchange::Exchange,
         session::{NocCatIds, ReservedSession, SessionMode},
-    },
-    utils::{
+    }, utils::{
         init::{init, zeroed, Init, InitMaybeUninit},
         rand::Rand,
         storage::WriteBuf,
-    },
+    }
 };
 
 #[derive(Debug, Clone)]
@@ -130,7 +122,7 @@ impl Case {
                 let mut decrypted = alloc!([0; 800]); // TODO LARGE BUFFER
                 if encrypted.len() > decrypted.len() {
                     error!("Data too large");
-                    Err(ErrorCode::NoSpace)?;
+                    Err(err!(NoSpace))?;
                 }
                 let decrypted = &mut decrypted[..encrypted.len()];
                 decrypted.copy_from_slice(encrypted);
@@ -406,7 +398,7 @@ impl Case {
             0x53, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x4b, 0x65, 0x79, 0x73,
         ];
         if key.len() < 48 {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
         let mut salt = heapless::Vec::<u8, 256>::new();
         salt.extend_from_slice(ipk).unwrap();
@@ -417,7 +409,7 @@ impl Case {
         //        println!("Session Key: salt: {:x?}, len: {}", salt, salt.len());
 
         crypto::hkdf_sha256(salt.as_slice(), shared_secret, &SEKEYS_INFO, key)
-            .map_err(|_x| ErrorCode::NoSpace)?;
+            .map_err(|_x| err!(NoSpace))?;
         //        println!("Session Key: key: {:x?}", key);
 
         Ok(())
@@ -454,7 +446,7 @@ impl Case {
     ) -> Result<(), Error> {
         const S3K_INFO: [u8; 6] = [0x53, 0x69, 0x67, 0x6d, 0x61, 0x33];
         if key.len() < 16 {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
         let mut salt = heapless::Vec::<u8, 256>::new();
         salt.extend_from_slice(ipk).unwrap();
@@ -467,7 +459,7 @@ impl Case {
         //        println!("Sigma3Key: salt: {:x?}, len: {}", salt, salt.len());
 
         crypto::hkdf_sha256(salt.as_slice(), shared_secret, &S3K_INFO, key)
-            .map_err(|_x| ErrorCode::NoSpace)?;
+            .map_err(|_x| err!(NoSpace))?;
         //        println!("Sigma3Key: key: {:x?}", key);
 
         Ok(())
@@ -481,7 +473,7 @@ impl Case {
     ) -> Result<(), Error> {
         const S2K_INFO: [u8; 6] = [0x53, 0x69, 0x67, 0x6d, 0x61, 0x32];
         if key.len() < 16 {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
         let mut salt = heapless::Vec::<u8, 256>::new();
         salt.extend_from_slice(ipk).unwrap();
@@ -496,7 +488,7 @@ impl Case {
         //        println!("Sigma2Key: salt: {:x?}, len: {}", salt, salt.len());
 
         crypto::hkdf_sha256(salt.as_slice(), &case_session.shared_secret, &S2K_INFO, key)
-            .map_err(|_x| ErrorCode::NoSpace)?;
+            .map_err(|_x| err!(NoSpace))?;
         //        println!("Sigma2Key: key: {:x?}", key);
 
         Ok(())

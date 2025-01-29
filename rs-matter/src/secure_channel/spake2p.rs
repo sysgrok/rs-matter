@@ -18,6 +18,7 @@
 use subtle::ConstantTimeEq;
 
 use crate::crypto::{self, pbkdf2_hmac, HmacSha256, Sha256};
+use crate::err;
 use crate::error::{Error, ErrorCode};
 use crate::utils::init::{init, zeroed, Init, IntoFallibleInit};
 use crate::utils::rand::Rand;
@@ -209,13 +210,13 @@ impl Spake2P {
         if ke_internal.len() == Ke.len() {
             Ke.copy_from_slice(ke_internal);
         } else {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
 
         // Step 2: KcA || KcB = KDF(nil, Ka, "ConfirmationKeys")
         let mut KcAKcB: [u8; 32] = [0; 32];
         crypto::hkdf_sha256(&[], Ka, SPAKE2P_KEY_CONFIRM_INFO, &mut KcAKcB)
-            .map_err(|_x| ErrorCode::NoSpace)?;
+            .map_err(|_x| err!(NoSpace))?;
 
         let KcA = &KcAKcB[0..(KcAKcB.len() / 2)];
         let KcB = &KcAKcB[(KcAKcB.len() / 2)..];

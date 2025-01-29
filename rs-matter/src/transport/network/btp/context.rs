@@ -19,6 +19,7 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 
 use log::{error, info, trace, warn};
 
+use crate::err;
 use crate::error::{Error, ErrorCode};
 use crate::transport::network::BtAddr;
 use crate::utils::cell::RefCell;
@@ -267,7 +268,7 @@ where
                     // Unwrap is safe because we checked the length above
                     sessions.push_init(
                         Session::process_rx_handshake(address, data, gatt_mtu)?.into_fallible::<Error>(),
-                        || ErrorCode::NoSpace.into(),
+                        || err!(NoSpace),
                     )
                     .unwrap();
                 }

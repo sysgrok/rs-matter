@@ -41,6 +41,7 @@ use x509_cert::{
     spki::{AlgorithmIdentifier, SubjectPublicKeyInfoOwned},
 };
 
+use crate::err;
 use crate::{
     error::{Error, ErrorCode},
     secure_channel::crypto_rustcrypto::RandRngCore,
@@ -258,7 +259,7 @@ impl KeyPair {
         use p256::ecdsa::signature::Signer;
 
         if signature.len() < super::EC_SIGNATURE_LEN_BYTES {
-            return Err(ErrorCode::NoSpace.into());
+            return Err(err!(NoSpace));
         }
 
         match &self.key {

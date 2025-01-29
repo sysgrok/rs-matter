@@ -178,7 +178,7 @@ impl KeyPair {
             a.copy_from_slice(csr);
             Ok(a)
         } else {
-            Err(ErrorCode::NoSpace.into())
+            Err(err!(NoSpace))
         }
     }
 
@@ -189,7 +189,7 @@ impl KeyPair {
         let msg = h.finish()?;
 
         if signature.len() < super::EC_SIGNATURE_LEN_BYTES {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
         safemem::write_bytes(signature, 0);
 
@@ -231,7 +231,7 @@ const P256_KEY_LEN: usize = 256 / 8;
 pub fn pubkey_from_der(der: &[u8], out_key: &mut [u8]) -> Result<(), Error> {
     if out_key.len() != P256_KEY_LEN {
         error!("Insufficient length");
-        Err(ErrorCode::NoSpace.into())
+        Err(err!(NoSpace))
     } else {
         let key = X509::from_der(der)?.public_key()?.public_key_to_der()?;
         let len = key.len();

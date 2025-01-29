@@ -15,7 +15,7 @@
  *    limitations under the License.
  */
 
-use crate::error::*;
+use crate::{err, error::*};
 use byteorder::{ByteOrder, LittleEndian};
 
 pub struct ParseBuf<'a> {
@@ -42,7 +42,7 @@ impl<'a> ParseBuf<'a> {
 
     pub fn load(&mut self, pb: &ParseBuf) -> Result<(), Error> {
         if self.buf.len() < pb.read_off + pb.left {
-            Err(ErrorCode::NoSpace)?;
+            Err(err!(NoSpace))?;
         }
 
         self.buf[0..pb.read_off + pb.left].copy_from_slice(&pb.buf[..pb.read_off + pb.left]);

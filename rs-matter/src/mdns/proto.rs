@@ -29,12 +29,14 @@ fn dns_class_with_flush(dns_class: Class) -> Class {
 
 impl From<ShortBuf> for Error {
     fn from(_: ShortBuf) -> Self {
+        panic!("???");
         Self::new(ErrorCode::NoSpace)
     }
 }
 
 impl From<PushError> for Error {
     fn from(_: PushError) -> Self {
+        panic!("???!!!");
         Self::new(ErrorCode::NoSpace)
     }
 }
@@ -130,10 +132,10 @@ impl Host<'_> {
         services.for_each(|service| {
             service.add_service(&mut answer, self.hostname, ttl_sec)?;
             service.add_service_type(&mut answer, ttl_sec)?;
-            service.add_service_subtypes(&mut answer, ttl_sec)?;
+            //service.add_service_subtypes(&mut answer, ttl_sec)?;
             service.add_dns_sd_service_type(&mut answer, ttl_sec)?;
-            service.add_dns_sd_service_subtypes(&mut answer, ttl_sec)?;
-            service.add_txt(&mut answer, ttl_sec)?;
+            //service.add_dns_sd_service_subtypes(&mut answer, ttl_sec)?;
+            //service.add_txt(&mut answer, ttl_sec)?;
 
             Ok(())
         })?;

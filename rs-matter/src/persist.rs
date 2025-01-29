@@ -27,9 +27,9 @@ pub mod fileio {
 
     use log::info;
 
-    use crate::error::{Error, ErrorCode};
+    use crate::error::Error;
     use crate::utils::init::{init, Init};
-    use crate::Matter;
+    use crate::{err, Matter};
 
     pub struct Psm<const N: usize = 4096> {
         buf: MaybeUninit<[u8; N]>,
@@ -108,7 +108,7 @@ pub mod fileio {
 
                     loop {
                         if offset == buf.len() {
-                            Err(ErrorCode::NoSpace)?;
+                            Err(err!(NoSpace))?;
                         }
 
                         let len = file.read(&mut buf[offset..])?;

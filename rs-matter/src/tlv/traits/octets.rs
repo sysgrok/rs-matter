@@ -32,7 +32,8 @@ use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::{Deref, DerefMut};
 
-use crate::error::{Error, ErrorCode};
+use crate::err;
+use crate::error::Error;
 use crate::utils::init::{self, init, IntoFallibleInit};
 use crate::utils::storage::Vec;
 
@@ -140,7 +141,7 @@ impl<const N: usize> DerefMut for OctetsOwned<N> {
 impl<'a, const N: usize> FromTLV<'a> for OctetsOwned<N> {
     fn from_tlv(element: &TLVElement<'a>) -> Result<Self, Error> {
         Ok(Self {
-            vec: element.str()?.try_into().map_err(|_| ErrorCode::NoSpace)?,
+            vec: element.str()?.try_into().map_err(|_| err!(NoSpace))?,
         })
     }
 
@@ -149,7 +150,7 @@ impl<'a, const N: usize> FromTLV<'a> for OctetsOwned<N> {
             bytes
                 .vec
                 .extend_from_slice(element.str()?)
-                .map_err(|_| ErrorCode::NoSpace)?;
+                .map_err(|_| err!(NoSpace))?;
 
             Ok(())
         })

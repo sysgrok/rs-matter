@@ -9,7 +9,8 @@ use embassy_time::{Duration, Timer};
 use log::{info, warn};
 
 use crate::data_model::cluster_basic_information::BasicInfoConfig;
-use crate::error::{Error, ErrorCode};
+use crate::err;
+use crate::error::Error;
 use crate::transport::network::{
     Address, Ipv4Addr, Ipv6Addr, NetworkReceive, NetworkSend, SocketAddr, SocketAddrV4,
     SocketAddrV6,
@@ -75,7 +76,7 @@ impl<'a> MdnsImpl<'a> {
         services.retain(|(name, _)| name != service);
         services
             .push((service.try_into().unwrap(), mode))
-            .map_err(|_| ErrorCode::NoSpace)?;
+            .map_err(|_| err!(NoSpace))?;
 
         self.notification.notify();
 
@@ -176,7 +177,7 @@ impl<'a> MdnsImpl<'a> {
                     })
                     .into_iter(),
             ) {
-                let mut buf = buffer.get().await.ok_or(ErrorCode::NoSpace)?;
+                let mut buf = buffer.get().await.ok_or(err!(NoSpace))?;
                 let mut send = send.lock().await;
 
                 let len = host.broadcast(self, &mut buf, 60)?;
@@ -211,10 +212,10 @@ impl<'a> MdnsImpl<'a> {
             recv.wait_available().await?;
 
             {
-                let mut rx = rx_buf.get().await.ok_or(ErrorCode::NoSpace)?;
+                let mut rx = rx_buf.get().await.ok_or(err!(NoSpace))?;
                 let (len, addr) = recv.recv_from(&mut rx).await?;
 
-                let mut tx = tx_buf.get().await.ok_or(ErrorCode::NoSpace)?;
+                let mut tx = tx_buf.get().await.ok_or(err!(NoSpace))?;
                 let mut send = send.lock().await;
 
                 let (len, delay) = match host.respond(self, &rx[..len], &mut tx, 60) {

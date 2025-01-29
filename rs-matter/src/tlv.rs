@@ -23,7 +23,7 @@ use core::marker::PhantomData;
 use num::FromPrimitive;
 use num_traits::ToBytes;
 
-use crate::error::{Error, ErrorCode};
+use crate::{err, error::{Error, ErrorCode}};
 
 pub use rs_matter_macros::{FromTLV, ToTLV};
 
@@ -194,7 +194,7 @@ impl TLVValueType {
             Self::Array => TLVValue::Array,
             Self::List => TLVValue::List,
             Self::EndCnt => TLVValue::EndCnt,
-            _ => Err(ErrorCode::TLVTypeMismatch)?,
+            _ => Err(err!(TLVTypeMismatch))?,
         })
     }
 }
@@ -259,7 +259,7 @@ impl TLVControl {
     #[inline(always)]
     pub fn parse(control: u8) -> Result<Self, Error> {
         let tag_type = FromPrimitive::from_u8((control & Self::TAG_MASK) >> Self::TAG_SHIFT_BITS)
-            .ok_or(ErrorCode::TLVTypeMismatch)?;
+            .ok_or(err!(TLVTypeMismatch))?;
         let value_type =
             FromPrimitive::from_u8(control & Self::TYPE_MASK).ok_or(ErrorCode::TLVTypeMismatch)?;
 

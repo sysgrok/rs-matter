@@ -29,7 +29,8 @@
 //! traversing the array is tolerable (i.e. `T` is small enough), prefer `TLVArray`, which operates
 //! directly on the borrowed, encoded TLV representation of the whole array.
 
-use crate::error::{Error, ErrorCode};
+use crate::err;
+use crate::error::Error;
 use crate::utils::init::{self, IntoFallibleInit};
 use crate::utils::storage::Vec;
 
@@ -43,7 +44,7 @@ where
         let mut vec = Vec::<T, N>::new();
 
         for item in TLVArray::new(element.clone())? {
-            vec.push(item?).map_err(|_| ErrorCode::NoSpace)?;
+            vec.push(item?).map_err(|_| err!(NoSpace))?;
         }
 
         Ok(vec)
@@ -54,7 +55,7 @@ where
             let mut iter = TLVArray::new(tlv)?.iter();
 
             while let Some(item) = iter.try_next_init() {
-                vec.push_init(item?, || ErrorCode::NoSpace.into())?;
+                vec.push_init(item?, || err!(NoSpace))?;
             }
 
             Ok(())

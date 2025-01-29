@@ -38,7 +38,7 @@ use crate::utils::rand::Rand;
 use crate::utils::select::Coalesce;
 use crate::utils::storage::{pooled::BufferAccess, ParseBuf, WriteBuf};
 use crate::utils::sync::{IfMutex, IfMutexGuard, Notification};
-use crate::{Matter, MATTER_PORT};
+use crate::{err, Matter, MATTER_PORT};
 
 use super::exchange::{Exchange, ExchangeId, ExchangeState, MessageMeta, ResponderState, Role};
 use super::network::{
@@ -206,7 +206,7 @@ impl<'m> TransportMgr<'m> {
 
         let exch_index = session
             .add_exch(exch_id, Role::Initiator(Default::default()))
-            .ok_or(ErrorCode::NoSpaceExchanges)?;
+            .ok_or(err!(NoSpaceExchanges))?;
 
         let id = ExchangeId::new(session.id, exch_index);
 
@@ -787,7 +787,7 @@ impl<'m> TransportMgr<'m> {
 
             Ok(())
         } else {
-            Err(ErrorCode::NoSpaceSessions.into())
+            Err(err!(NoSpaceSessions))
         }
     }
 

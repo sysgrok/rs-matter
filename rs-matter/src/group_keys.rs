@@ -16,10 +16,7 @@
  */
 
 use crate::{
-    crypto::{self, SYMM_KEY_LEN_BYTES},
-    error::{Error, ErrorCode},
-    tlv::{FromTLV, ToTLV},
-    utils::init::{init, zeroed, Init},
+    crypto::{self, SYMM_KEY_LEN_BYTES}, err, error::Error, tlv::{FromTLV, ToTLV}, utils::init::{init, zeroed, Init}
 };
 
 type KeySetKey = [u8; SYMM_KEY_LEN_BYTES];
@@ -58,7 +55,7 @@ impl KeySet {
         ];
 
         crypto::hkdf_sha256(compressed_id, ipk, &GRP_KEY_INFO, opkey)
-            .map_err(|_| ErrorCode::NoSpace.into())
+            .map_err(|_| err!(NoSpace))
     }
 
     pub fn op_key(&self) -> &[u8] {

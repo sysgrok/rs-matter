@@ -20,11 +20,7 @@ use core::mem::MaybeUninit;
 use log::error;
 
 use crate::{
-    error::*,
-    respond::ExchangeHandler,
-    secure_channel::{common::*, pake::Pake},
-    transport::exchange::Exchange,
-    utils::init::InitMaybeUninit,
+    err, error::*, respond::ExchangeHandler, secure_channel::{common::*, pake::Pake}, transport::exchange::Exchange, utils::init::InitMaybeUninit
 };
 
 use super::{
@@ -50,7 +46,7 @@ impl SecureChannel {
 
         let meta = exchange.rx()?.meta();
         if meta.proto_id != PROTO_ID_SECURE_CHANNEL {
-            Err(ErrorCode::InvalidProto)?;
+            Err(err!(InvalidProto))?;
         }
 
         match meta.opcode()? {
@@ -66,7 +62,7 @@ impl SecureChannel {
             }
             opcode => {
                 error!("Invalid opcode: {:?}", opcode);
-                Err(ErrorCode::InvalidOpcode.into())
+                Err(err!(InvalidOpcode))
             }
         }
     }

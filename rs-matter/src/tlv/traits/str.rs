@@ -25,7 +25,7 @@
 
 use heapless::String;
 
-use crate::error::{Error, ErrorCode};
+use crate::{err, error::Error};
 
 use super::{FromTLV, TLVElement, TLVTag, TLVWrite, ToTLV, TLV};
 
@@ -64,7 +64,7 @@ impl<'a, const N: usize> FromTLV<'a> for String<N> {
     fn from_tlv(element: &TLVElement<'a>) -> Result<String<N>, Error> {
         element
             .utf8()
-            .and_then(|s| s.try_into().map_err(|_| ErrorCode::NoSpace.into()))
+            .and_then(|s| s.try_into().map_err(|_| err!(NoSpace)))
     }
 }
 
