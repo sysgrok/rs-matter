@@ -17,11 +17,15 @@
 
 use core::fmt::{self, Debug};
 
-use crate::error::{Error, ErrorCode};
-use crate::utils::rand::Rand;
-
 use alloc::vec;
+
 use foreign_types::ForeignTypeRef;
+
+// We directly use the hmac crate here, there was a self-referential structure
+// problem while using OpenSSL's Signer
+// TODO: Use proper OpenSSL method for this
+use hmac::{Hmac, Mac};
+
 use openssl::asn1::Asn1Type;
 use openssl::bn::{BigNum, BigNumContext};
 use openssl::cipher::CipherRef;
@@ -38,10 +42,8 @@ use openssl::pkey_ctx::PkeyCtx;
 use openssl::symm::{self};
 use openssl::x509::{X509NameBuilder, X509ReqBuilder, X509};
 
-// We directly use the hmac crate here, there was a self-referential structure
-// problem while using OpenSSL's Signer
-// TODO: Use proper OpenSSL method for this
-use hmac::{Hmac, Mac};
+use crate::error::{Error, ErrorCode};
+use crate::utils::rand::Rand;
 
 extern crate alloc;
 

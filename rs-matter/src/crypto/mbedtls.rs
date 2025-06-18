@@ -15,30 +15,26 @@
  *    limitations under the License.
  */
 
-extern crate alloc;
-
 use core::fmt::{self, Debug};
 
 use alloc::sync::Arc;
 
-use mbedtls::{
-    bignum::Mpi,
-    cipher::{Authenticated, Cipher},
-    ecp::EcPoint,
-    hash::{self, Hkdf, Hmac, Md, Type},
-    pk::{EcGroup, EcGroupId, Pk},
-    rng::{CtrDrbg, OsEntropy},
-    x509,
-};
+use mbedtls::bignum::Mp;
+use mbedtls::cipher::{Authenticated, Cipher};
+use mbedtls::ecp::EcPoint;
+use mbedtls::hash::{self, Hkdf, Hmac, Md, Type};
+use mbedtls::pk::{EcGroup, EcGroupId, Pk};
+use mbedtls::rng::{CtrDrbg, OsEntropy};
+use mbedtls::x509;
 
-use crate::{
-    // TODO: We should move ASN1Writer out of Cert,
-    // so Crypto doesn't have to depend on Cert
-    cert::{ASN1Writer, CertConsumer},
-    error::{Error, ErrorCode},
-    fmt::Bytes,
-    utils::rand::Rand,
-};
+// TODO: We should move ASN1Writer out of Cert,
+// so Crypto doesn't have to depend on Cert
+use crate::cert::{ASN1Writer, CertConsumer};
+use crate::error::{Error, ErrorCode};
+use crate::fmt::Bytes;
+use crate::utils::rand::Rand;
+
+extern crate alloc;
 
 pub struct HmacSha256 {
     inner: Hmac,

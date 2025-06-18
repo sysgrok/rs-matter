@@ -15,8 +15,6 @@
  *    limitations under the License.
  */
 
-use crate::error;
-
 use crate::error::{Error, ErrorCode};
 use crate::utils::rand::Rand;
 

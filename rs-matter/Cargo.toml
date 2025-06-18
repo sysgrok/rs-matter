@@ -12,15 +12,13 @@ license = "Apache-2.0"
 rust-version = "1.83"
 
 [features]
-default = ["os", "rustcrypto", "log"]
-#default = ["os", "mbedtls", "log"] mbedtls is broken since several months - check the root cause
+default = ["os", "log"]
 os = ["std", "backtrace", "critical-section/std", "embassy-sync/std", "embassy-time/std"]
 std = ["alloc", "rand"]
 backtrace = []
 alloc = ["defmt?/alloc"]
-openssl = ["alloc", "dep:openssl", "foreign-types", "hmac", "sha2"]
+openssl = ["alloc", "dep:openssl", "foreign-types"]
 mbedtls = ["alloc", "dep:mbedtls"]
-rustcrypto = ["alloc", "sha2", "hmac", "pbkdf2", "hkdf", "aes", "ccm", "p256", "sec1", "elliptic-curve", "crypto-bigint", "x509-cert", "rand_core"]
 defmt = ["dep:defmt", "heapless/defmt-03", "embassy-time/defmt"]
 log = ["dep:log", "embassy-time/log"]
 large-buffers = [] # TCP support
@@ -58,18 +56,18 @@ foreign-types = { version = "0.3", optional = true }
 mbedtls = { version = "0.12", optional = true, features = ["x509"] }
 
 # rust-crypto
-sha2 = { version = "0.10", default-features = false, optional = true }
-hmac = { version = "0.12", optional = true }
-pbkdf2 = { version = "0.12", optional = true }
-hkdf = { version = "0.12", optional = true }
-aes = { version = "0.8", optional = true }
-ccm = { version = "0.5", default-features = false, features = ["alloc"], optional = true }
-p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdh", "ecdsa"], optional = true }
-sec1 = { version = "0.7", default-features = false, optional = true }
-elliptic-curve = { version = "0.13", optional = true }
-crypto-bigint = { version = "0.5", default-features = false, optional = true }
-rand_core = { version = "0.6", default-features = false, optional = true }
-x509-cert = { version = "0.2", default-features = false, features = ["pem"], optional = true } # TODO: requires `alloc`
+sha2 = { version = "0.10", default-features = false }
+hmac = "0.12"
+pbkdf2 = "0.12"
+hkdf = "0.12"
+aes = "0.8"
+ccm = { version = "0.5", default-features = false, features = ["alloc"] }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdh", "ecdsa"] }
+sec1 = { version = "0.7", default-features = false }
+elliptic-curve = "0.13"
+crypto-bigint = { version = "0.5", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+x509-cert = { version = "0.2", default-features = false, features = ["pem"] } # TODO: requires `alloc`
 
 # STD
 rand = { version = "0.8", optional = true, default-features = false, features = ["std", "std_rng"] }

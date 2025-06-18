@@ -23,15 +23,13 @@ use crate::{
     utils::init::InitMaybeUninit,
 };
 
-#[cfg(not(any(feature = "openssl", feature = "mbedtls", feature = "rustcrypto")))]
-pub use self::dummy::*;
 #[cfg(all(feature = "mbedtls", target_os = "espidf"))]
 pub use self::esp_mbedtls::*;
 #[cfg(all(feature = "mbedtls", not(target_os = "espidf")))]
 pub use self::mbedtls::*;
-#[cfg(feature = "openssl")]
+#[cfg(all(feature = "openssl", not(feature = "mbedtls")))]
 pub use self::openssl::*;
-#[cfg(feature = "rustcrypto")]
+#[cfg(not(any(feature = "openssl", feature = "mbedtls")))]
 pub use self::rustcrypto::*;
 
 pub const SYMM_KEY_LEN_BITS: usize = 128;
@@ -52,15 +50,13 @@ pub const ECDH_SHARED_SECRET_LEN_BYTES: usize = 32;
 
 pub const EC_SIGNATURE_LEN_BYTES: usize = 64;
 
-#[cfg(not(any(feature = "openssl", feature = "mbedtls", feature = "rustcrypto")))]
-mod dummy;
 #[cfg(all(feature = "mbedtls", target_os = "espidf"))]
 mod esp_mbedtls;
 #[cfg(all(feature = "mbedtls", not(target_os = "espidf")))]
 mod mbedtls;
-#[cfg(feature = "openssl")]
+#[cfg(all(feature = "openssl", not(feature = "mbedtls")))]
 mod openssl;
-#[cfg(feature = "rustcrypto")]
+#[cfg(not(any(feature = "openssl", feature = "mbedtls")))]
 mod rustcrypto;
 
 impl<'a> FromTLV<'a> for KeyPair {
