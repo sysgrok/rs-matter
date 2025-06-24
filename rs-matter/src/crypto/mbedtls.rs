@@ -18,14 +18,7 @@
 use core::fmt::{self, Debug};
 
 use alloc::sync::Arc;
-
-use mbedtls::bignum::Mp;
-use mbedtls::cipher::{Authenticated, Cipher};
-use mbedtls::ecp::EcPoint;
-use mbedtls::hash::{self, Hkdf, Hmac, Md, Type};
-use mbedtls::pk::{EcGroup, EcGroupId, Pk};
-use mbedtls::rng::{CtrDrbg, OsEntropy};
-use mbedtls::x509;
+use mbedtls::bindings::{mbedtls_md_context_t, mbedtls_md_finish, mbedtls_md_free, mbedtls_md_hmac_finish, mbedtls_md_hmac_starts, mbedtls_md_hmac_update, mbedtls_md_info_from_type, mbedtls_md_init, mbedtls_md_setup, mbedtls_md_starts, mbedtls_md_type_t_MBEDTLS_MD_SHA256, mbedtls_md_update, psa_crypto_init, psa_generate_key, psa_key_attributes_t};
 
 // TODO: We should move ASN1Writer out of Cert,
 // so Crypto doesn't have to depend on Cert
@@ -36,24 +29,37 @@ use crate::utils::rand::Rand;
 
 extern crate alloc;
 
-pub struct HmacSha256 {
-    inner: Hmac,
-}
+pub struct HmacSha256(mbedtls_md_context_t);
 
+// TODO: Change the `HmacSha256` API in such a way that it can be re-used for multiple sign excercises
 impl HmacSha256 {
     pub fn new(key: &[u8]) -> Result<Self, Error> {
-        Ok(Self {
-            inner: Hmac::new(Type::Sha256, key)?,
-        })
+        let mut this = Self(Default::default());
+
+        unsafe { mbedtls_md_init(&mut this.0) };
+        unsafe { mbedtls_md_setup(&mut this.0, mbedtls_md_info_from_type(mbedtls_md_type_t_MBEDTLS_MD_SHA256), 1) };
+        unsafe { mbedtls_md_hmac_starts(&mut this.0, key.as_ptr(), key.len() as _) };
+
+        Ok(this)
     }
 
     pub fn update(&mut self, data: &[u8]) -> Result<(), Error> {
-        Ok(self.inner.update(data)?)
+        unsafe { mbedtls_md_hmac_update(&mut self.0, data.as_ptr(), data.len() as _) };
+
+        Ok(())
     }
 
-    pub fn finish(self, out: &mut [u8]) -> Result<(), Error> {
-        self.inner.finish(out)?;
+    pub fn finish(mut self, out: &mut [u8]) -> Result<(), Error> {
+        // TODO: Check `out`` size
+        unsafe { mbedtls_md_hmac_finish(&mut self.0, out.as_mut_ptr()) };
+
         Ok(())
+    }
+}
+
+impl Drop for HmacSha256 {
+    fn drop(&mut self) {
+        unsafe { mbedtls_md_free(&mut self.0) };
     }
 }
 
@@ -63,6 +69,18 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn new(_rand: Rand) -> Result<Self, Error> {
+        unsafe { psa_crypto_init() };
+
+        let attrs: psa_key_attributes_t = Default::default();
+
+        attrs.private_core.private_policy.private_usage = PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_VERIFY_HASH;
+        attrs.private_core.private_policy.private_alg = PSA_ALG_ECDSA(PSA_ALG_SHA_256);
+        attrs.private_core.private_type = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_CURVE_P_256);
+        attrs.private_core.private_bits = 256; 
+
+        unsafe { psa_generate_key(&attrs, key) };
+
+
         let mut ctr_drbg = CtrDrbg::new(Arc::new(OsEntropy::new()), None)?;
         Ok(Self {
             key: Pk::generate_ec(&mut ctr_drbg, EcGroupId::SecP256R1)?,
@@ -298,6 +316,8 @@ fn convert_asn1_sign_to_r_s(signature: &mut [u8]) -> Result<usize, Error> {
 }
 
 pub fn pbkdf2_hmac(pass: &[u8], iter: usize, salt: &[u8], key: &mut [u8]) -> Result<(), Error> {
+    mbedtls::bindings::mbedtls_pkcs5_pbkdf2_hmac_ext();
+
     Ok(mbedtls::hash::pbkdf2_hmac(
         Type::Sha256,
         pass,
@@ -308,6 +328,7 @@ pub fn pbkdf2_hmac(pass: &[u8], iter: usize, salt: &[u8], key: &mut [u8]) -> Res
 }
 
 pub fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], key: &mut [u8]) -> Result<(), Error> {
+    mbedtls_hkdf_sha256
     Ok(Hkdf::hkdf(Type::Sha256, salt, ikm, info, key)?)
 }
 
@@ -351,26 +372,37 @@ pub fn decrypt_in_place(
         .map(|(len, _)| len)?)
 }
 
-#[derive(Clone)]
-pub struct Sha256 {
-    ctx: Md,
-}
+// TODO: Change the `HmacSha256` API in such a way that it can be re-used for multiple sign excercises
+pub struct Sha256(mbedtls_md_context_t);
 
 impl Sha256 {
-    pub fn new() -> Result<Self, Error> {
-        Ok(Self {
-            ctx: Md::new(Type::Sha256)?,
-        })
+    pub fn new(key: &[u8]) -> Result<Self, Error> {
+        let mut this = Self(Default::default());
+
+        unsafe { mbedtls_md_init(&mut this.0) };
+        unsafe { mbedtls_md_setup(&mut this.0, mbedtls_md_info_from_type(mbedtls_md_type_t_MBEDTLS_MD_SHA256), 0) };
+        unsafe { mbedtls_md_starts(&mut this.0) };
+
+        Ok(this)
     }
 
     pub fn update(&mut self, data: &[u8]) -> Result<(), Error> {
-        self.ctx.update(data)?;
+        unsafe { mbedtls_md_update(&mut self.0, data.as_ptr(), data.len() as _) };
+
         Ok(())
     }
 
-    pub fn finish(self, digest: &mut [u8]) -> Result<(), Error> {
-        self.ctx.finish(digest)?;
+    pub fn finish(mut self, out: &mut [u8]) -> Result<(), Error> {
+        // TODO: Check `out`` size
+        unsafe { mbedtls_md_finish(&mut self.0, out.as_mut_ptr()) };
+
         Ok(())
+    }
+}
+
+impl Drop for Sha256 {
+    fn drop(&mut self) {
+        unsafe { mbedtls_md_free(&mut self.0) };
     }
 }
 
