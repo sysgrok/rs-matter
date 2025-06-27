@@ -24,7 +24,7 @@ use heapless::String;
 use crate::acl::{self, AccessReq, AclEntry, AuthMode};
 use crate::cert::{CertRef, MAX_CERT_TLV_LEN};
 use crate::crypto::{self, hkdf_sha256, HmacSha256, KeyPair};
-use crate::dm::Privilege;
+use crate::dm::{NodeId, Privilege};
 use crate::error::{Error, ErrorCode};
 use crate::group_keys::KeySet;
 use crate::mdns::{Mdns, ServiceMode};
@@ -41,7 +41,7 @@ pub struct Fabric {
     /// Fabric local index
     fab_idx: NonZeroU8,
     /// Fabric node ID
-    node_id: u64,
+    node_id: NodeId,
     /// Fabric ID
     fabric_id: u64,
     /// Vendor ID
@@ -203,7 +203,7 @@ impl Fabric {
     }
 
     /// Return the fabric's node ID
-    pub fn node_id(&self) -> u64 {
+    pub fn node_id(&self) -> NodeId {
         self.node_id
     }
 

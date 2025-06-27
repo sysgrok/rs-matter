@@ -22,13 +22,14 @@ use embassy_time::Instant;
 
 use portable_atomic::{AtomicU32, Ordering};
 
+use crate::dm::NodeId;
 use crate::utils::cell::RefCell;
 use crate::utils::init::{init, Init};
 use crate::utils::sync::Notification;
 
 struct Subscription {
     fabric_idx: NonZeroU8,
-    peer_node_id: u64,
+    peer_node_id: NodeId,
     session_id: Option<u32>,
     id: u32,
     // We use u16 instead of embassy::Duration to save some storage
@@ -105,7 +106,7 @@ impl<const N: usize> Subscriptions<N> {
     pub(crate) fn add(
         &self,
         fabric_idx: NonZeroU8,
-        peer_node_id: u64,
+        peer_node_id: NodeId,
         session_id: u32,
         min_int_secs: u16,
         max_int_secs: u16,
@@ -148,7 +149,7 @@ impl<const N: usize> Subscriptions<N> {
     pub(crate) fn remove(
         &self,
         fabric_idx: Option<NonZeroU8>,
-        peer_node_id: Option<u64>,
+        peer_node_id: Option<NodeId>,
         id: Option<u32>,
     ) {
         let mut subscriptions = self.subscriptions.borrow_mut();
@@ -164,7 +165,7 @@ impl<const N: usize> Subscriptions<N> {
     pub(crate) fn find_removed_session<F>(
         &self,
         session_removed: F,
-    ) -> Option<(NonZeroU8, u64, u32, u32)>
+    ) -> Option<(NonZeroU8, NodeId, u32, u32)>
     where
         F: Fn(u32) -> bool,
     {
@@ -181,7 +182,10 @@ impl<const N: usize> Subscriptions<N> {
         })
     }
 
-    pub(crate) fn find_expired(&self, now: Instant) -> Option<(NonZeroU8, u64, Option<u32>, u32)> {
+    pub(crate) fn find_expired(
+        &self,
+        now: Instant,
+    ) -> Option<(NonZeroU8, NodeId, Option<u32>, u32)> {
         self.subscriptions.borrow().iter().find_map(|sub| {
             sub.is_expired(now).then_some((
                 sub.fabric_idx,
@@ -197,7 +201,7 @@ impl<const N: usize> Subscriptions<N> {
     pub(crate) fn find_report_due(
         &self,
         now: Instant,
-    ) -> Option<(NonZeroU8, u64, Option<u32>, u32)> {
+    ) -> Option<(NonZeroU8, NodeId, Option<u32>, u32)> {
         self.subscriptions
             .borrow_mut()
             .iter_mut()

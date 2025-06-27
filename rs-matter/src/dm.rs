@@ -59,7 +59,7 @@ pub type IMBuffer = heapless::Vec<u8, MAX_EXCHANGE_RX_BUF_SIZE>;
 
 struct SubscriptionBuffer<B> {
     fabric_idx: NonZeroU8,
-    peer_node_id: u64,
+    peer_node_id: NodeId,
     subscription_id: u32,
     buffer: B,
 }
@@ -599,7 +599,7 @@ where
         &self,
         matter: &Matter<'_>,
         fabric_idx: NonZeroU8,
-        peer_node_id: u64,
+        peer_node_id: NodeId,
         session_id: Option<u32>,
         id: u32,
         rx: &[u8],
@@ -686,7 +686,7 @@ where
         &self,
         id: u32,
         fabric_idx: u8,
-        peer_node_id: u64,
+        peer_node_id: NodeId,
         rx: &[u8],
         tx: &mut [u8],
         exchange: &mut Exchange<'_>,

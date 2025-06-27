@@ -21,7 +21,9 @@ use core::time::Duration;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
-use crate::dm::{AttrDetails, AttrId, ClusterId, CmdId, EndptId};
+use crate::dm::{
+    AttrDetails, AttrId, ClusterId, CmdId, EndptId, EventId, LeafId, ListIndex, NodeId,
+};
 use crate::error::*;
 use crate::tlv::{FromTLV, Nullable, TLVArray, TLVElement, TLVTag, TLVWrite, TagType, ToTLV, TLV};
 use crate::transport::exchange::MessageMeta;
@@ -149,14 +151,14 @@ pub const PROTO_ID_INTERACTION_MODEL: u16 = 0x01;
 pub struct GenericPath {
     pub endpoint: Option<EndptId>,
     pub cluster: Option<ClusterId>,
-    pub leaf: Option<u32>,
+    pub leaf: Option<LeafId>,
 }
 
 impl GenericPath {
     pub const fn new(
         endpoint: Option<EndptId>,
         cluster: Option<ClusterId>,
-        leaf: Option<u32>,
+        leaf: Option<LeafId>,
     ) -> Self {
         Self {
             endpoint,
@@ -166,7 +168,7 @@ impl GenericPath {
     }
 
     /// Returns Ok, if the path is non wildcard, otherwise returns an error
-    pub fn not_wildcard(&self) -> Result<(EndptId, ClusterId, u32), Error> {
+    pub fn not_wildcard(&self) -> Result<(EndptId, ClusterId, LeafId), Error> {
         match *self {
             GenericPath {
                 endpoint: Some(e),
@@ -876,11 +878,11 @@ impl AttrStatus {
 #[tlvargs(datatype = "list")]
 pub struct AttrPath {
     pub tag_compression: Option<bool>,
-    pub node: Option<u64>,
+    pub node: Option<NodeId>,
     pub endpoint: Option<EndptId>,
     pub cluster: Option<ClusterId>,
     pub attr: Option<AttrId>,
-    pub list_index: Option<Nullable<u16>>,
+    pub list_index: Option<Nullable<ListIndex>>,
 }
 
 impl AttrPath {
@@ -965,7 +967,7 @@ impl ToTLV for CmdPath {
 #[derive(FromTLV, ToTLV, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ClusterPath {
-    pub node: Option<u64>,
+    pub node: Option<NodeId>,
     pub endpoint: EndptId,
     pub cluster: ClusterId,
 }
@@ -981,16 +983,16 @@ pub struct DataVersionFilter {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[tlvargs(datatype = "list")]
 pub struct EventPath {
-    pub node: Option<u64>,
+    pub node: Option<NodeId>,
     pub endpoint: Option<EndptId>,
     pub cluster: Option<ClusterId>,
-    pub event: Option<u32>,
+    pub event: Option<EventId>,
     pub is_urgent: Option<bool>,
 }
 
 #[derive(FromTLV, ToTLV, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct EventFilter {
-    pub node: Option<u64>,
-    pub event_min: Option<u64>,
+    pub node: Option<NodeId>,
+    pub event_min: Option<EventId>,
 }

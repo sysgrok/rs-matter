@@ -39,10 +39,15 @@ mod metadata;
 mod node;
 mod privilege;
 
+pub type GroupId = u16;
+pub type NodeId = u64;
 pub type EndptId = u16;
 pub type ClusterId = u32;
-pub type AttrId = u32;
-pub type CmdId = u32;
+pub type LeafId = u32;
+pub type AttrId = LeafId;
+pub type CmdId = LeafId;
+pub type ListIndex = u16;
+pub type EventId = u32;
 
 #[derive(Debug, ToTLV, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
