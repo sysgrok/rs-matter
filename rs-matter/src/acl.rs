@@ -26,13 +26,12 @@ use crate::dm::clusters::acl::{
 };
 use crate::dm::{Access, ClusterId, EndptId, Privilege};
 use crate::error::{Error, ErrorCode};
-use crate::fabric::FabricMgr;
 use crate::im::GenericPath;
 use crate::tlv::{FromTLV, Nullable, TLVBuilderParent, TLVElement, TLVTag, TLVWrite, ToTLV, TLV};
 use crate::transport::session::{Session, SessionMode, MAX_CAT_IDS_PER_NOC};
-use crate::utils::cell::RefCell;
 use crate::utils::init::{init, Init, IntoFallibleInit};
 use crate::utils::storage::Vec;
+use crate::Matter;
 
 /// Max subjects per ACL entry
 // TODO: Make this configurable via a cargo feature
@@ -208,20 +207,18 @@ impl defmt::Format for AccessorSubjects {
 }
 
 /// The Accessor Object
-pub struct Accessor<'a> {
+pub struct Accessor {
     /// The fabric index of the accessor
     pub fab_idx: u8,
     /// Accessor's subject: could be node-id, NoC CAT, group id
     subjects: AccessorSubjects,
     /// The auth mode of this session. Might be `None` for plain-text sessions
     auth_mode: Option<AuthMode>,
-    // TODO: Is this the right place for this though, or should we just use a global-acl-handle-get
-    fabric_mgr: &'a RefCell<FabricMgr>,
 }
 
-impl<'a> Accessor<'a> {
+impl Accessor {
     /// Create a new Accessor object for the given session
-    pub fn for_session(session: &Session, fabric_mgr: &'a RefCell<FabricMgr>) -> Self {
+    pub fn for_session(session: &Session) -> Self {
         match session.get_session_mode() {
             SessionMode::Case {
                 fab_idx, cat_ids, ..
@@ -233,15 +230,14 @@ impl<'a> Accessor<'a> {
                         let _ = subject.add_catid(i);
                     }
                 }
-                Accessor::new(fab_idx.get(), subject, Some(AuthMode::Case), fabric_mgr)
+                Accessor::new(fab_idx.get(), subject, Some(AuthMode::Case))
             }
             SessionMode::Pase { fab_idx } => Accessor::new(
                 *fab_idx,
                 AccessorSubjects::new(1),
                 Some(AuthMode::Pase),
-                fabric_mgr,
             ),
-            SessionMode::PlainText => Accessor::new(0, AccessorSubjects::new(1), None, fabric_mgr),
+            SessionMode::PlainText => Accessor::new(0, AccessorSubjects::new(1), None),
         }
     }
 
@@ -256,13 +252,11 @@ impl<'a> Accessor<'a> {
         fab_idx: u8,
         subjects: AccessorSubjects,
         auth_mode: Option<AuthMode>,
-        fabric_mgr: &'a RefCell<FabricMgr>,
     ) -> Self {
         Self {
             fab_idx,
             subjects,
             auth_mode,
-            fabric_mgr,
         }
     }
 
@@ -293,7 +287,7 @@ pub struct AccessDesc {
 /// Access Request Object
 pub struct AccessReq<'a> {
     /// The accessor requesting access
-    accessor: &'a Accessor<'a>,
+    accessor: &'a Accessor,
     /// The object being accessed
     object: AccessDesc,
 }
@@ -315,7 +309,7 @@ impl<'a> AccessReq<'a> {
     }
 
     /// Return the accessor of the request
-    pub fn accessor(&self) -> &Accessor<'_> {
+    pub fn accessor(&self) -> &Accessor {
         self.accessor
     }
 
@@ -337,8 +331,10 @@ impl<'a> AccessReq<'a> {
     /// This checks all the ACL list to identify if any of the ACLs provides the
     /// _accessor_ the necessary privileges to access the target as per its
     /// permissions
-    pub fn allow(&self) -> bool {
-        self.accessor.fabric_mgr.borrow().allow(self)
+    pub fn allow(&self, matter: impl Matter) -> bool {
+        matter.state(|state| {
+            state.fabrics.allow(self)
+        })
     }
 }
 

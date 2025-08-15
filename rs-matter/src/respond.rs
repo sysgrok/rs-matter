@@ -28,7 +28,7 @@ use crate::im::busy::BusyInteractionModel;
 use crate::im::PROTO_ID_INTERACTION_MODEL;
 use crate::sc::busy::BusySecureChannel;
 use crate::sc::SecureChannel;
-use crate::transport::exchange::Exchange;
+use crate::transport::exchange::{Exchange, ExchangeInstance};
 use crate::utils::select::Coalesce;
 use crate::utils::storage::pooled::BufferAccess;
 use crate::Matter;
@@ -39,14 +39,14 @@ const RESPOND_BUSY_MS: u32 = 500;
 
 /// A trait modeling a generic handler for an exchange.
 pub trait ExchangeHandler {
-    async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error>;
+    async fn handle(&self, exchange: impl Exchange) -> Result<(), Error>;
 }
 
 impl<T> ExchangeHandler for &T
 where
     T: ExchangeHandler,
 {
-    async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    async fn handle(&self, exchange: impl Exchange) -> Result<(), Error> {
         (*self).handle(exchange).await
     }
 }
@@ -91,8 +91,10 @@ where
     H: ExchangeHandler,
     T: ExchangeHandler,
 {
-    async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
-        let rx = exchange.recv_fetch().await?;
+    async fn handle(&self, mut exchange: impl Exchange) -> Result<(), Error> {
+        exchange.recv_fetch().await?;
+
+        let rx = exchange.rx()?;
 
         if rx.meta().proto_id == self.handler_proto {
             self.handler.handle(exchange).await
@@ -106,15 +108,16 @@ where
 /// by applying the provided `ExchangeHandler` instance to each accepted exchange.
 ///
 /// This responder uses an intra-task concurrency model - without an external executor - where all handling is done as a single future.
-pub struct Responder<'a, T> {
+pub struct Responder<'a, M, T> {
     name: &'a str,
     handler: T,
-    matter: &'a Matter<'a>,
+    matter: M,
     respond_after_ms: u32,
 }
 
-impl<'a, T> Responder<'a, T>
+impl<'a, M, T> Responder<'a, M, T>
 where
+    M: Matter,
     T: ExchangeHandler,
 {
     /// Create a new responder.
@@ -128,7 +131,7 @@ where
     pub const fn new(
         name: &'a str,
         handler: T,
-        matter: &'a Matter<'a>,
+        matter: M,
         respond_after_ms: u32,
     ) -> Self {
         Self {
@@ -174,7 +177,7 @@ where
     /// Useful in e.g. integration tests, where we know that we are expecting to respond to a single exchange within the run of the test.
     #[inline(always)]
     pub async fn respond_once(&self, handler_id: impl Display) -> Result<(), Error> {
-        let mut exchange = Exchange::accept_after(self.matter, self.respond_after_ms).await?;
+        let mut exchange = ExchangeInstance::accept_after(&self.matter, self.respond_after_ms).await?;
 
         if self.log_warn() {
             warn!(
@@ -226,16 +229,17 @@ where
     }
 }
 
-impl<'a, const N: usize, B, T>
-    Responder<'a, ChainedExchangeHandler<DataModel<'a, N, B, T>, SecureChannel>>
+impl<'a, const N: usize, B, M, T>
+    Responder<'a, M, ChainedExchangeHandler<DataModel<'a, N, B, T>, SecureChannel>>
 where
+    M: Matter,
     B: BufferAccess<IMBuffer>,
 {
     /// Creates a "default" responder. This is a responder that composes and uses the `rs-matter`-provided `ExchangeHandler` implementations
     /// (`SecureChannel` and `DataModel`) for handling the Secure Channel protocol and the Interaction Model protocol.
     #[inline(always)]
     pub const fn new_default(
-        matter: &'a Matter<'a>,
+        matter: M,
         buffers: &'a B,
         subscriptions: &'a Subscriptions<N>,
         dm_handler: T,
@@ -256,7 +260,10 @@ where
     }
 }
 
-impl<'a> Responder<'a, ChainedExchangeHandler<BusyInteractionModel, BusySecureChannel>> {
+impl<'a, M> Responder<'a, M, ChainedExchangeHandler<BusyInteractionModel, BusySecureChannel>> 
+where 
+    M: Matter,
+{
     /// Creates a simple "busy" responder, which is answering all exchanges with a simple "I'm busy, try again later" handling.
     /// The resonder is using the `rs-matter`-provided `ExchangeHandler` instances (`BusySecureChannel` and `BusyInteractionModel`)
     /// capable of answering with "busy" messages the SC and IM protocols, respectively.
@@ -264,7 +271,7 @@ impl<'a> Responder<'a, ChainedExchangeHandler<BusyInteractionModel, BusySecureCh
     /// Exchanges which are not accepted after the specified milliseconds are answered by this responder,
     /// as the assumption is that the main responder is busy and cannot answer these right now.
     #[inline(always)]
-    pub const fn new_busy(matter: &'a Matter<'a>, respond_after_ms: u32) -> Self {
+    pub const fn new_busy(matter: M, respond_after_ms: u32) -> Self {
         Self::new(
             "Busy Responder",
             ChainedExchangeHandler::new(
@@ -279,30 +286,32 @@ impl<'a> Responder<'a, ChainedExchangeHandler<BusyInteractionModel, BusySecureCh
 }
 
 /// A composition of the `Responder::new_default` and `Responder::new_busy` responders.
-pub struct DefaultResponder<'a, const N: usize, B, T>
+pub struct DefaultResponder<'a, const N: usize, B, M, T>
 where
     B: BufferAccess<IMBuffer>,
 {
-    responder: Responder<'a, ChainedExchangeHandler<DataModel<'a, N, B, T>, SecureChannel>>,
-    busy_responder: Responder<'a, ChainedExchangeHandler<BusyInteractionModel, BusySecureChannel>>,
+    responder: Responder<'a, M, ChainedExchangeHandler<DataModel<'a, N, B, T>, SecureChannel>>,
+    busy_responder: Responder<'a, M, ChainedExchangeHandler<BusyInteractionModel, BusySecureChannel>>,
 }
 
-impl<'a, const N: usize, B, T> DefaultResponder<'a, N, B, T>
+impl<'a, const N: usize, B, M, T> DefaultResponder<'a, N, B, M, T>
 where
     B: BufferAccess<IMBuffer>,
+    M: Matter,
     T: DataModelHandler,
 {
     /// Creates the responder composition.
     #[inline(always)]
     pub const fn new(
-        matter: &'a Matter<'a>,
+        matter1: M,
+        matter2: M,
         buffers: &'a B,
         subscriptions: &'a Subscriptions<N>,
         dm_handler: T,
     ) -> Self {
         Self {
-            responder: Responder::new_default(matter, buffers, subscriptions, dm_handler),
-            busy_responder: Responder::new_busy(matter, RESPOND_BUSY_MS),
+            responder: Responder::new_default(matter1, buffers, subscriptions, dm_handler),
+            busy_responder: Responder::new_busy(matter2, RESPOND_BUSY_MS),
         }
     }
 
@@ -314,7 +323,7 @@ where
             .responder
             .handler()
             .handler
-            .process_subscriptions(self.responder.matter));
+            .process_subscriptions(&self.responder.matter));
 
         select3(&mut actual, &mut busy, &mut sub).coalesce().await
     }

@@ -85,6 +85,7 @@ use crate::failsafe::FailSafe;
 use crate::pairing::{print_pairing_code_and_qr, DiscoveryCapabilities};
 use crate::sc::pake::PaseMgr;
 use crate::transport::network::{NetworkReceive, NetworkSend};
+use crate::transport::session::SessionMgr;
 use crate::transport::{PacketBufferExternalAccess, TransportMgr};
 use crate::utils::cell::RefCell;
 use crate::utils::epoch::Epoch;
@@ -92,6 +93,7 @@ use crate::utils::init::{init, Init};
 use crate::utils::rand::Rand;
 use crate::utils::storage::pooled::BufferAccess;
 use crate::utils::storage::WriteBuf;
+use crate::utils::sync::blocking::Mutex;
 use crate::utils::sync::Notification;
 
 /// Re-export the `rs_matter_macros::import` proc-macro
@@ -239,13 +241,299 @@ pub struct BasicCommData {
     pub discriminator: u16,
 }
 
+pub struct MatterState {
+    pub fabrics: FabricMgr,
+    pub pase: PaseMgr,
+    pub failsafe: FailSafe,
+    pub basic_info_settings: BasicInfoSettings,
+    pub sessions: SessionMgr,
+}
+
+impl MatterState {
+    const fn new(epoch: Epoch, rand: Rand) -> Self {
+        Self {
+            fabrics: FabricMgr::new(),
+            pase: PaseMgr::new(epoch, rand),
+            failsafe: FailSafe::new(epoch, rand),
+            basic_info_settings: BasicInfoSettings::new(),
+            sessions: SessionMgr::new(epoch, rand),
+        }        
+    }
+
+    fn init(epoch: Epoch, rand: Rand) -> impl Init<Self> {
+        init!(Self {
+            fabrics <- FabricMgr::init(),
+            pase <- PaseMgr::init(epoch, rand),
+            failsafe <- FailSafe::init(epoch, rand),
+            basic_info_settings <- BasicInfoSettings::init(),
+            sessions <- SessionMgr::init(epoch, rand),
+        })
+    }
+}
+
+pub trait Matter {
+    fn initialize_transport_buffers(&self) -> Result<(), Error>;
+
+    fn dev_det(&self) -> &BasicInfoConfig<'_>;
+
+    fn dev_att(&self) -> &dyn DevAttDataFetcher;
+
+    fn dev_comm(&self) -> &BasicCommData;
+
+    fn port(&self) -> u16;
+
+    fn rand(&self) -> Rand;
+
+    fn epoch(&self) -> Epoch;
+
+    fn transport_rx_buffer(&self) -> impl BufferAccess<[u8]> + '_;
+
+    fn transport_tx_buffer(&self) -> impl BufferAccess<[u8]> + '_;
+
+    fn state<F: FnOnce(&mut MatterState) -> R, R>(&self, f: F) -> R;
+
+    fn transport(&self) -> &TransportMgr;
+
+    /// Return `true` if there is at least one commissioned fabric
+    //
+    // TODO:
+    // The implementation of this method needs to change in future,
+    // because the current implementation does not really track whether
+    // `CommissioningComplete` had been actually received for the fabric.
+    //
+    // The fabric is created once we receive `AddNoc`, but that's just
+    // not enough. The fabric should NOT be considered commissioned until
+    // after we receive `CommissioningComplete` on behalf of a Case session
+    // for the fabric in question.
+    fn is_commissioned(&self) -> bool;
+
+    /// Enable basic commissioning by setting up a PASE session and printing the pairing code and QR code.
+    ///
+    /// The method will return an error if there is not enough space in the buffer to print the pairing code and QR code
+    /// or if the PASE session could not be set up (due to another PASE session already being active, for example).
+    ///
+    /// Parameters:
+    /// * `discovery_capabilities`: The discovery capabilities of the device (IP, BLE or Soft-AP)
+    /// * `timeout_secs`: The timeout in seconds for the basic commissioning session
+    async fn enable_basic_commissioning(
+        &self,
+        discovery_capabilities: DiscoveryCapabilities,
+        timeout_secs: u16,
+    ) -> Result<(), Error>;
+
+    /// Disable the basic commissioning session
+    ///
+    /// The method will return Ok(false) if there is no active PASE session to disable.
+    fn disable_commissioning(&self) -> Result<bool, Error>;
+
+    /// Run the transport layer
+    ///
+    /// Enables basic commissioning if the device is not commissioned
+    /// Note that the fabrics should be loaded by the PSM before calling this method
+    /// or else commissioning will be always enabled.
+    async fn run<S, R>(
+        &self,
+        send: S,
+        recv: R,
+        discovery_capabilities: DiscoveryCapabilities,
+    ) -> Result<(), Error>
+    where
+        S: NetworkSend,
+        R: NetworkReceive;
+
+    /// Resets the transport layer by clearing all sessions, exchanges, the RX buffer and the TX buffer
+    /// NOTE: User should be careful _not_ to call this method while the transport layer and/or the built-in mDNS is running.
+    fn reset_transport(&self) -> Result<(), Error>;
+
+    /// Run the transport layer
+    async fn run_transport<S, R>(&self, send: S, recv: R) -> Result<(), Error>
+    where
+        S: NetworkSend,
+        R: NetworkReceive;
+
+    /// Notify that the ACLs, Fabrics or Basic Info _might_ have changed
+    /// This method is supposed to be called after processing SC and IM messages that might affect the ACLs, Fabrics or Basic Info.
+    ///
+    /// The default IM and SC handlers (`DataModel` and `SecureChannel`) do call this method after processing the messages.
+    ///
+    /// TODO: Fix the method name as it is not clear enough. Potentially revamp the whole persistence notification logic
+    fn notify_persist(&self);
+
+    fn load_fabrics(&self, data: &[u8]) -> Result<(), Error>;
+
+    fn store_fabrics<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error>;
+
+    fn fabrics_changed(&self) -> bool;
+
+    fn load_basic_info(&self, data: &[u8]) -> Result<(), Error>;
+
+    fn store_basic_info<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error>;
+
+    fn basic_info_changed(&self) -> bool;
+
+    /// A hook for user persistence code to wait for potential changes in ACLs, Fabrics or basic info.
+    ///
+    /// Once this future resolves, user code is supposed to inspect ACLs, Fabrics and basic info for changes, and
+    /// if there are changes, persist them.
+    ///
+    /// TODO: Fix the method name as it is not clear enough. Potentially revamp the whole persistence notification logic
+    async fn wait_persist(&self);
+
+    fn mdns_services<F>(&self, f: F) -> Result<(), Error>
+    where 
+        F: FnMut(MatterMdnsService) -> Result<(), Error>;
+
+    /// Notify that the Matter mDNS services _might_ have changed.
+    /*pub(crate)*/ fn notify_mdns(&self);
+
+    /// A hook for user code to wait for notification that the Matter mDNS services might have changed.
+    ///
+    /// Once this future resolves, user code is supposed to inspect the mDNS services for changes, and
+    /// if there are changes, re-publish the changed mDNS services in an mDNS responder accordingly.
+    async fn wait_mdns(&self);
+}
+
+impl<T> Matter for &T 
+where 
+    T: Matter,
+{
+    fn initialize_transport_buffers(&self) -> Result<(), Error> {
+        (**self).initialize_transport_buffers()
+    }
+
+    fn state<F: FnOnce(&mut MatterState) -> R, R>(&self, f: F) -> R {
+        (**self).state(f)
+    }
+
+    fn transport(&self) -> &TransportMgr {
+        (**self).transport()
+    }
+
+    fn dev_det(&self) -> &BasicInfoConfig<'_> {
+        (**self).dev_det()
+    }
+
+    fn dev_att(&self) -> &dyn DevAttDataFetcher {
+        (**self).dev_att()
+    }
+
+    fn dev_comm(&self) -> &BasicCommData {
+        (**self).dev_comm()
+    }
+
+    fn port(&self) -> u16 {
+        (**self).port()
+    }
+
+    fn rand(&self) -> Rand {
+        (**self).rand()
+    }
+
+    fn epoch(&self) -> Epoch {
+        (**self).epoch()
+    }
+
+    fn transport_rx_buffer(&self) -> impl BufferAccess<[u8]> + '_ {
+        (**self).transport_rx_buffer()
+    }
+
+    fn transport_tx_buffer(&self) -> impl BufferAccess<[u8]> + '_ {
+        (**self).transport_tx_buffer()
+    }
+
+    fn is_commissioned(&self) -> bool {
+        (**self).is_commissioned()
+    }
+
+    async fn enable_basic_commissioning(
+        &self,
+        discovery_capabilities: DiscoveryCapabilities,
+        timeout_secs: u16,
+    ) -> Result<(), Error> {
+        (**self).enable_basic_commissioning(discovery_capabilities, timeout_secs).await
+    }
+
+    fn disable_commissioning(&self) -> Result<bool, Error> {
+        (**self).disable_commissioning()
+    }
+
+    async fn run<S, R>(
+        &self,
+        send: S,
+        recv: R,
+        discovery_capabilities: DiscoveryCapabilities,
+    ) -> Result<(), Error>
+    where
+        S: NetworkSend,
+        R: NetworkReceive,
+    {
+        (**self).run(send, recv, discovery_capabilities).await
+    }
+
+    fn reset_transport(&self) -> Result<(), Error> {
+        (**self).reset_transport()
+    }
+
+    async fn run_transport<S, R>(&self, send: S, recv: R) -> Result<(), Error> 
+    where
+        S: NetworkSend,
+        R: NetworkReceive,
+    {
+        (**self).run_transport(send, recv).await
+    }
+
+    fn notify_persist(&self) {
+        (**self).notify_persist();
+    }
+
+    fn load_fabrics(&self, data: &[u8]) -> Result<(), Error> {
+        (**self).load_fabrics(data)
+    }
+
+    fn store_fabrics<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error> {
+        (**self).store_fabrics(buf)
+    }
+
+    fn fabrics_changed(&self) -> bool {
+        (**self).fabrics_changed()
+    }
+
+    fn load_basic_info(&self, data: &[u8]) -> Result<(), Error> {
+        (**self).load_basic_info(data)
+    }
+
+    fn store_basic_info<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error> {
+        (**self).store_basic_info(buf)
+    }
+
+    fn basic_info_changed(&self) -> bool {
+        (**self).basic_info_changed()
+    }
+
+    async fn wait_persist(&self) {
+        (**self).wait_persist().await;
+    }
+
+    fn mdns_services<F>(&self, f: F) -> Result<(), Error>
+    where 
+        F: FnMut(MatterMdnsService) -> Result<(), Error>,
+    {
+        (**self).mdns_services(f)
+    }
+
+    fn notify_mdns(&self) {
+        (**self).notify_mdns();
+    }
+
+    async fn wait_mdns(&self) {
+        (**self).wait_mdns().await;
+    }
+}
+
 /// The primary Matter Object
-pub struct Matter<'a> {
-    pub fabric_mgr: RefCell<FabricMgr>, // Public for tests
-    pub(crate) pase_mgr: RefCell<PaseMgr>,
-    pub(crate) failsafe: RefCell<FailSafe>,
-    pub(crate) basic_info_settings: RefCell<BasicInfoSettings>,
-    pub transport_mgr: TransportMgr, // Public for tests
+pub struct MatterInstance<'a> {
+    state: Mutex<NoopRawMutex, RefCell<MatterState>>,
+    transport_mgr: TransportMgr,
     persist_notification: Notification<NoopRawMutex>,
     mdns_notification: Notification<NoopRawMutex>,
     epoch: Epoch,
@@ -256,7 +544,7 @@ pub struct Matter<'a> {
     port: u16,
 }
 
-impl<'a> Matter<'a> {
+impl<'a> MatterInstance<'a> {
     /// Create a new Matter object when support for the Rust Standard Library is enabled.
     ///
     /// # Parameters
@@ -304,11 +592,8 @@ impl<'a> Matter<'a> {
         port: u16,
     ) -> Self {
         Self {
-            fabric_mgr: RefCell::new(FabricMgr::new()),
-            pase_mgr: RefCell::new(PaseMgr::new(epoch, rand)),
-            failsafe: RefCell::new(FailSafe::new(epoch, rand)),
-            transport_mgr: TransportMgr::new(dev_det, epoch, rand),
-            basic_info_settings: RefCell::new(BasicInfoSettings::new()),
+            state: Mutex::new(RefCell::new(MatterState::new(epoch, rand))),
+            transport_mgr: TransportMgr::new(dev_det, rand),
             persist_notification: Notification::new(),
             mdns_notification: Notification::new(),
             epoch,
@@ -367,11 +652,8 @@ impl<'a> Matter<'a> {
     ) -> impl Init<Self> {
         init!(
             Self {
-                fabric_mgr <- RefCell::init(FabricMgr::init()),
-                pase_mgr <- RefCell::init(PaseMgr::init(epoch, rand)),
-                failsafe: RefCell::new(FailSafe::new(epoch, rand)),
-                transport_mgr <- TransportMgr::init(dev_det, epoch, rand),
-                basic_info_settings <- RefCell::init(BasicInfoSettings::init()),
+                state <- Mutex::init(RefCell::init(MatterState::init(epoch, rand))),
+                transport_mgr <- TransportMgr::init(dev_det, rand),
                 persist_notification: Notification::new(),
                 mdns_notification: Notification::new(),
                 epoch,
@@ -384,71 +666,62 @@ impl<'a> Matter<'a> {
         )
     }
 
-    pub fn initialize_transport_buffers(&self) -> Result<(), Error> {
-        self.transport_mgr.initialize_buffers()
-    }
-
-    pub fn dev_det(&self) -> &BasicInfoConfig<'_> {
-        self.dev_det
-    }
-
-    pub fn dev_att(&self) -> &dyn DevAttDataFetcher {
-        self.dev_att
-    }
-
-    pub fn dev_comm(&self) -> &BasicCommData {
-        &self.dev_comm
-    }
-
-    pub fn port(&self) -> u16 {
-        self.port
-    }
-
-    pub fn rand(&self) -> Rand {
-        self.rand
-    }
-
-    pub fn epoch(&self) -> Epoch {
-        self.epoch
-    }
-
-    pub fn transport_rx_buffer(&self) -> impl BufferAccess<[u8]> + '_ {
-        self.transport_mgr.rx_buffer()
-    }
-
-    pub fn transport_tx_buffer(&self) -> impl BufferAccess<[u8]> + '_ {
-        self.transport_mgr.tx_buffer()
-    }
-
     /// A utility method to replace the initial Device Attestation Data Fetcher with another one.
     pub fn replace_dev_att(&mut self, dev_att: &'a dyn DevAttDataFetcher) {
         self.dev_att = dev_att;
     }
+}
 
-    /// Return `true` if there is at least one commissioned fabric
-    //
-    // TODO:
-    // The implementation of this method needs to change in future,
-    // because the current implementation does not really track whether
-    // `CommissioningComplete` had been actually received for the fabric.
-    //
-    // The fabric is created once we receive `AddNoc`, but that's just
-    // not enough. The fabric should NOT be considered commissioned until
-    // after we receive `CommissioningComplete` on behalf of a Case session
-    // for the fabric in question.
-    pub fn is_commissioned(&self) -> bool {
-        self.fabric_mgr.borrow().iter().count() > 0
+impl Matter for MatterInstance<'_> {
+    fn initialize_transport_buffers(&self) -> Result<(), Error> {
+        self.transport_mgr.initialize_buffers()
     }
 
-    /// Enable basic commissioning by setting up a PASE session and printing the pairing code and QR code.
-    ///
-    /// The method will return an error if there is not enough space in the buffer to print the pairing code and QR code
-    /// or if the PASE session could not be set up (due to another PASE session already being active, for example).
-    ///
-    /// Parameters:
-    /// * `discovery_capabilities`: The discovery capabilities of the device (IP, BLE or Soft-AP)
-    /// * `timeout_secs`: The timeout in seconds for the basic commissioning session
-    pub async fn enable_basic_commissioning(
+    fn dev_det(&self) -> &BasicInfoConfig<'_> {
+        self.dev_det
+    }
+
+    fn dev_att(&self) -> &dyn DevAttDataFetcher {
+        self.dev_att
+    }
+
+    fn dev_comm(&self) -> &BasicCommData {
+        &self.dev_comm
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    fn rand(&self) -> Rand {
+        self.rand
+    }
+
+    fn epoch(&self) -> Epoch {
+        self.epoch
+    }
+
+    fn state<F: FnOnce(&mut MatterState) -> R, R>(&self, f: F) -> R {
+        self.state.lock(|state| f(&mut *state.borrow_mut()))
+    }
+
+    fn transport(&self) -> &TransportMgr {
+        &self.transport_mgr
+    }
+
+    fn transport_rx_buffer(&self) -> impl BufferAccess<[u8]> + '_ {
+        self.transport_mgr.rx_buffer()
+    }
+
+    fn transport_tx_buffer(&self) -> impl BufferAccess<[u8]> + '_ {
+        self.transport_mgr.tx_buffer()
+    }
+
+    fn is_commissioned(&self) -> bool {
+        self.state(|state| state.fabrics.iter().count() > 0)
+    }
+
+    async fn enable_basic_commissioning(
         &self,
         discovery_capabilities: DiscoveryCapabilities,
         timeout_secs: u16,
@@ -456,12 +729,12 @@ impl<'a> Matter<'a> {
         let buf_access = PacketBufferExternalAccess(&self.transport_mgr.rx);
         let mut buf = buf_access.get().await.ok_or(ErrorCode::NoSpace)?;
 
-        self.pase_mgr.borrow_mut().enable_basic_pase_session(
+        self.state(|state| state.pase.enable_basic_pase_session(
             self.dev_comm.password,
             self.dev_comm.discriminator,
             timeout_secs,
             &mut || self.notify_mdns(),
-        )?;
+        ))?;
 
         print_pairing_code_and_qr(
             self.dev_det,
@@ -476,10 +749,8 @@ impl<'a> Matter<'a> {
     /// Disable the basic commissioning session
     ///
     /// The method will return Ok(false) if there is no active PASE session to disable.
-    pub fn disable_commissioning(&self) -> Result<bool, Error> {
-        self.pase_mgr
-            .borrow_mut()
-            .disable_pase_session(&mut || self.notify_mdns())
+    fn disable_commissioning(&self) -> Result<bool, Error> {
+        self.state(|state| state.pase.disable_pase_session(&mut || self.notify_mdns()))
     }
 
     /// Run the transport layer
@@ -487,7 +758,7 @@ impl<'a> Matter<'a> {
     /// Enables basic commissioning if the device is not commissioned
     /// Note that the fabrics should be loaded by the PSM before calling this method
     /// or else commissioning will be always enabled.
-    pub async fn run<S, R>(
+    async fn run<S, R>(
         &self,
         send: S,
         recv: R,
@@ -509,17 +780,17 @@ impl<'a> Matter<'a> {
 
     /// Resets the transport layer by clearing all sessions, exchanges, the RX buffer and the TX buffer
     /// NOTE: User should be careful _not_ to call this method while the transport layer and/or the built-in mDNS is running.
-    pub fn reset_transport(&self) -> Result<(), Error> {
-        self.transport_mgr.reset()
+    fn reset_transport(&self) -> Result<(), Error> {
+        self.transport_mgr.reset(self)
     }
 
     /// Run the transport layer
-    pub async fn run_transport<S, R>(&self, send: S, recv: R) -> Result<(), Error>
+    async fn run_transport<S, R>(&self, send: S, recv: R) -> Result<(), Error>
     where
         S: NetworkSend,
         R: NetworkReceive,
     {
-        self.transport_mgr.run(send, recv).await
+        self.transport_mgr.run(self, send, recv).await
     }
 
     /// Notify that the ACLs, Fabrics or Basic Info _might_ have changed
@@ -528,78 +799,64 @@ impl<'a> Matter<'a> {
     /// The default IM and SC handlers (`DataModel` and `SecureChannel`) do call this method after processing the messages.
     ///
     /// TODO: Fix the method name as it is not clear enough. Potentially revamp the whole persistence notification logic
-    pub fn notify_persist(&self) {
+    fn notify_persist(&self) {
         if self.fabrics_changed() || self.basic_info_changed() {
             self.persist_notification.notify();
         }
     }
 
-    pub fn load_fabrics(&self, data: &[u8]) -> Result<(), Error> {
-        self.fabric_mgr
-            .borrow_mut()
-            .load(data, &mut || self.notify_mdns())
+    fn load_fabrics(&self, data: &[u8]) -> Result<(), Error> {
+        self.state(|state| state.fabrics.load(data, &mut || self.notify_mdns()))
     }
 
-    pub fn store_fabrics<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error> {
-        self.fabric_mgr.borrow_mut().store(buf)
+    fn store_fabrics<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error> {
+        self.state(|state| state.fabrics.store(buf))
     }
 
-    pub fn fabrics_changed(&self) -> bool {
-        self.fabric_mgr.borrow().is_changed()
+    fn fabrics_changed(&self) -> bool {
+        self.state(|state| state.fabrics.is_changed())
     }
 
-    pub fn load_basic_info(&self, data: &[u8]) -> Result<(), Error> {
-        self.basic_info_settings.borrow_mut().load(data)
+    fn load_basic_info(&self, data: &[u8]) -> Result<(), Error> {
+        self.state(|state| state.basic_info_settings.load(data))
     }
 
-    pub fn store_basic_info<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error> {
-        self.basic_info_settings.borrow_mut().store(buf)
+    fn store_basic_info<'b>(&self, buf: &'b mut [u8]) -> Result<Option<&'b [u8]>, Error> {
+        self.state(|state| state.basic_info_settings.store(buf))
     }
 
-    pub fn basic_info_changed(&self) -> bool {
-        self.basic_info_settings.borrow().changed
+    fn basic_info_changed(&self) -> bool {
+        self.state(|state| state.basic_info_settings.changed)
     }
 
-    /// A hook for user persistence code to wait for potential changes in ACLs, Fabrics or basic info.
-    ///
-    /// Once this future resolves, user code is supposed to inspect ACLs, Fabrics and basic info for changes, and
-    /// if there are changes, persist them.
-    ///
-    /// TODO: Fix the method name as it is not clear enough. Potentially revamp the whole persistence notification logic
-    pub async fn wait_persist(&self) {
+    async fn wait_persist(&self) {
         self.persist_notification.wait().await
     }
 
-    pub fn mdns_services<F>(&self, mut f: F) -> Result<(), Error>
+    fn mdns_services<F>(&self, mut f: F) -> Result<(), Error>
     where
         F: FnMut(MatterMdnsService) -> Result<(), Error>,
     {
-        let pase_mgr = self.pase_mgr.borrow();
-        let fabric_mgr = self.fabric_mgr.borrow();
-
-        if let Some(service) = pase_mgr.mdns_service() {
-            f(service)?;
-        }
-
-        for fabric in fabric_mgr.iter() {
-            if let Some(service) = fabric.mdns_service() {
+        self.state(|state| {
+            if let Some(service) = state.pase.mdns_service() {
                 f(service)?;
             }
-        }
 
-        Ok(())
+            for fabric in state.fabrics.iter() {
+                if let Some(service) = fabric.mdns_service() {
+                    f(service)?;
+                }
+            }
+
+            Ok(())
+        })
     }
 
-    /// Notify that the Matter mDNS services _might_ have changed.
-    pub(crate) fn notify_mdns(&self) {
+    fn notify_mdns(&self) {
         self.mdns_notification.notify();
     }
 
-    /// A hook for user code to wait for notification that the Matter mDNS services might have changed.
-    ///
-    /// Once this future resolves, user code is supposed to inspect the mDNS services for changes, and
-    /// if there are changes, re-publish the changed mDNS services in an mDNS responder accordingly.
-    pub async fn wait_mdns(&self) {
+    async fn wait_mdns(&self) {
         self.mdns_notification.wait().await
     }
 }

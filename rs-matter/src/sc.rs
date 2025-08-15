@@ -121,7 +121,7 @@ impl SCStatusCodes {
 }
 
 pub async fn complete_with_status(
-    exchange: &mut Exchange<'_>,
+    mut exchange: impl Exchange,
     status_code: SCStatusCodes,
     payload: &[u8],
 ) -> Result<(), Error> {
@@ -230,7 +230,7 @@ impl SecureChannel {
         Self(())
     }
 
-    pub async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    pub async fn handle(&self, mut exchange: impl Exchange) -> Result<(), Error> {
         if exchange.rx().is_err() {
             exchange.recv_fetch().await?;
         }
@@ -266,7 +266,7 @@ impl Default for SecureChannel {
 }
 
 impl ExchangeHandler for SecureChannel {
-    async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    async fn handle(&self, exchange: impl Exchange) -> Result<(), Error> {
         SecureChannel::handle(self, exchange).await
     }
 }
@@ -274,7 +274,7 @@ impl ExchangeHandler for SecureChannel {
 /// Check that the opcode of the received message matches the expected one.
 /// Logs an error if that's not the case, and if the opcode is `StatusReport`,
 /// it also logs the details of the status report.
-fn check_opcode(exchange: &Exchange<'_>, opcode: OpCode) -> Result<(), Error> {
+fn check_opcode<'a>(exchange: impl Exchange, opcode: OpCode) -> Result<(), Error> {
     let meta = exchange.rx()?.meta();
     let their_opcode = meta.opcode::<OpCode>()?;
 

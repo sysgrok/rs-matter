@@ -17,7 +17,7 @@
 
 use core::{mem::MaybeUninit, num::NonZeroU8};
 
-use crate::alloc;
+use crate::{alloc, Matter};
 use crate::cert::CertRef;
 use crate::crypto::{self, KeyPair, Sha256};
 use crate::error::{Error, ErrorCode};
@@ -86,16 +86,16 @@ impl Case {
 
     pub async fn handle(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         case_session: &mut CaseSession,
     ) -> Result<(), Error> {
         let session = ReservedSession::reserve(exchange.matter()).await?;
 
-        self.handle_casesigma1(exchange, case_session).await?;
+        self.handle_casesigma1(&mut exchange, case_session).await?;
 
         exchange.recv_fetch().await?;
 
-        self.handle_casesigma3(exchange, case_session, session)
+        self.handle_casesigma3(&mut exchange, case_session, session)
             .await?;
 
         exchange.acknowledge().await?;
@@ -106,11 +106,11 @@ impl Case {
 
     async fn handle_casesigma3(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         case_session: &mut CaseSession,
         mut session: ReservedSession<'_>,
     ) -> Result<(), Error> {
-        check_opcode(exchange, OpCode::CASESigma3)?;
+        check_opcode(&mut exchange, OpCode::CASESigma3)?;
 
         let status = {
             let fabric_mgr = exchange.matter().fabric_mgr.borrow();
@@ -213,10 +213,10 @@ impl Case {
 
     async fn handle_casesigma1(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         case_session: &mut CaseSession,
     ) -> Result<(), Error> {
-        check_opcode(exchange, OpCode::CASESigma1)?;
+        check_opcode(&mut exchange, OpCode::CASESigma1)?;
 
         let root = get_root_node_struct(exchange.rx()?.payload())?;
         let r = Sigma1Req::from_tlv(&root)?;

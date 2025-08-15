@@ -28,8 +28,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fmt::Bytes;
 use crate::sc::{sc_write, OpCode, SCStatusCodes, StatusReport, PROTO_ID_SECURE_CHANNEL};
 use crate::tlv::TLVElement;
-use crate::utils::cell::RefCell;
-use crate::utils::epoch::Epoch;
+use crate::transport::exchange::ExchangeInstance;
 use crate::utils::init::{init, Init};
 use crate::utils::rand::Rand;
 use crate::utils::select::Coalesce;
@@ -37,7 +36,7 @@ use crate::utils::storage::{pooled::BufferAccess, ParseBuf, WriteBuf};
 use crate::utils::sync::{IfMutex, IfMutexGuard, Notification};
 use crate::{Matter, MATTER_PORT};
 
-use exchange::{Exchange, ExchangeId, ExchangeState, MessageMeta, ResponderState, Role};
+use exchange::{ExchangeId, ExchangeState, MessageMeta, ResponderState, Role};
 use network::{Address, Ipv6Addr, NetworkReceive, NetworkSend, SocketAddr, SocketAddrV6};
 use packet::PacketHdr;
 use proto_hdr::ProtoHdr;
@@ -80,7 +79,6 @@ pub struct TransportMgr {
     pub(crate) tx: IfMutex<NoopRawMutex, Packet<MAX_TX_BUF_SIZE>>,
     pub(crate) dropped: Notification<NoopRawMutex>,
     pub(crate) session_removed: Notification<NoopRawMutex>,
-    pub session_mgr: RefCell<SessionMgr>, // For testing
     #[allow(dead_code)]
     rand: Rand,
     device_sai: Option<u16>,
@@ -89,13 +87,12 @@ pub struct TransportMgr {
 
 impl TransportMgr {
     #[inline(always)]
-    pub(crate) const fn new(dev_det: &BasicInfoConfig<'_>, epoch: Epoch, rand: Rand) -> Self {
+    pub(crate) const fn new(dev_det: &BasicInfoConfig<'_>, rand: Rand) -> Self {
         Self {
             rx: IfMutex::new(Packet::new()),
             tx: IfMutex::new(Packet::new()),
             dropped: Notification::new(),
             session_removed: Notification::new(),
-            session_mgr: RefCell::new(SessionMgr::new(epoch, rand)),
             rand,
             device_sai: dev_det.sai,
             device_sii: dev_det.sii,
@@ -104,7 +101,6 @@ impl TransportMgr {
 
     pub(crate) fn init<'m>(
         dev_det: &'m BasicInfoConfig<'m>,
-        epoch: Epoch,
         rand: Rand,
     ) -> impl Init<Self> + 'm {
         init!(Self {
@@ -112,7 +108,6 @@ impl TransportMgr {
             tx <- IfMutex::init(Packet::init()),
             dropped: Notification::new(),
             session_removed: Notification::new(),
-            session_mgr <- RefCell::init(SessionMgr::init(epoch, rand)),
             rand,
             device_sai: dev_det.sai,
             device_sii: dev_det.sii,
@@ -144,8 +139,9 @@ impl TransportMgr {
 
     /// Resets the transport layer by clearing all sessions, exchanges, the RX buffer and the TX buffer
     /// NOTE: User should be careful _not_ to call this method while the transport layer and/or the built-in mDNS is running.
-    pub fn reset(&self) -> Result<(), Error> {
-        self.session_mgr.borrow_mut().reset();
+    pub fn reset(&self, matter: impl Matter) -> Result<(), Error> {
+        matter.state(|state| state.sessions.reset());
+
         self.rx
             .try_lock()
             .map_err(|_| ErrorCode::InvalidState)?
@@ -160,109 +156,113 @@ impl TransportMgr {
         Ok(())
     }
 
-    pub(crate) async fn initiate<'a>(
-        &'a self,
-        matter: &'a Matter<'a>,
+    pub(crate) async fn initiate<'a, M: Matter>(
+        &self,
+        matter: &'a M,
         fabric_idx: u8,
         peer_node_id: u64,
         secure: bool,
-    ) -> Result<Exchange<'a>, Error> {
+    ) -> Result<ExchangeInstance<'a, M>, Error> {
         // TODO: Future: once we have mDNS lookups in place
         // create a new session if no suitable one is found
 
-        let session_id = {
+        let session_id = matter.state(|state| {
             // (block necessary, or else we end up re-borrowing `SessionMgr` as mut twice)
 
-            let mut session_mgr = self.session_mgr.borrow_mut();
+            let sessions = &mut state.sessions;
 
-            session_mgr
+            sessions
                 .get_for_node(fabric_idx, peer_node_id, secure)
-                .ok_or(ErrorCode::NoSession)?
-                .id
-        };
+                .map(|sess| sess.id)
+                .ok_or(ErrorCode::NoSession)
+        })?;
 
         self.initiate_for_session(matter, session_id)
     }
 
-    pub(crate) fn initiate_for_session<'a>(
-        &'a self,
-        matter: &'a Matter<'a>,
+    pub(crate) fn initiate_for_session<'a, M: Matter>(
+        &self,
+        matter: &'a M,
         session_id: u32,
-    ) -> Result<Exchange<'a>, Error> {
-        let mut session_mgr = self.session_mgr.borrow_mut();
+    ) -> Result<ExchangeInstance<'a, M>, Error> {
+        matter.state(|state| {
+            let sessions = &mut state.sessions;
 
-        session_mgr
-            .get(session_id)
-            // Expired sessions are not allowed to initiate new exchanges
-            .filter(|sess| !sess.is_expired())
-            .ok_or(ErrorCode::NoSession)?;
+            sessions
+                .get(session_id)
+                // Expired sessions are not allowed to initiate new exchanges
+                .filter(|sess| !sess.is_expired())
+                .ok_or(ErrorCode::NoSession)?;
 
-        let exch_id = session_mgr.get_next_exch_id();
+            let exch_id = sessions.get_next_exch_id();
 
-        // `unwrap` is safe because we know we have a session or else the early return from above would've triggered
-        // The reason why we call `get_for_node` twice is to ensure that we don't waste an `exch_id` in case
-        // we don't have a session in the first place
-        let session = unwrap!(session_mgr.get(session_id));
+            // `unwrap` is safe because we know we have a session or else the early return from above would've triggered
+            // The reason why we call `get_for_node` twice is to ensure that we don't waste an `exch_id` in case
+            // we don't have a session in the first place
+            let session = unwrap!(sessions.get(session_id));
 
-        let exch_index = session
-            .add_exch(exch_id, Role::Initiator(Default::default()))
-            .ok_or(ErrorCode::NoSpaceExchanges)?;
+            let exch_index = session
+                .add_exch(exch_id, Role::Initiator(Default::default()))
+                .ok_or(ErrorCode::NoSpaceExchanges)?;
 
-        let id = ExchangeId::new(session.id, exch_index);
+            let id = ExchangeId::new(session.id, exch_index);
 
-        debug!("Exchange {}: Initiated", id.display(session));
+            debug!("Exchange {}: Initiated", id.display(session));
 
-        Ok(Exchange::new(id, matter))
+            Ok(ExchangeInstance::new(id, matter))
+        })
     }
 
-    pub(crate) async fn accept_if<'a, F>(
+    pub(crate) async fn accept_if<'a, M: Matter, F>(
         &'a self,
-        matter: &'a Matter<'a>,
+        matter: &'a M,
         mut f: F,
-    ) -> Result<Exchange<'a>, Error>
+    ) -> Result<ExchangeInstance<'a, M>, Error>
     where
         F: FnMut(&Session, &ExchangeState, &Packet<MAX_RX_BUF_SIZE>) -> bool,
     {
         let exchange = self
             .with_locked(&self.rx, |packet| {
-                let mut session_mgr = self.session_mgr.borrow_mut();
+                matter.state(|state| {
+                    let sessions = &mut state.sessions;
 
-                let session = session_mgr.get_for_rx(&packet.peer, &packet.header.plain)?;
-                let exch_index = session.get_exch_for_rx(&packet.header.proto)?;
+                    let session = sessions.get_for_rx(&packet.peer, &packet.header.plain)?;
+                    let exch_index = session.get_exch_for_rx(&packet.header.proto)?;
 
-                let matches = {
+                    let matches = {
+                        // `unwrap` is safe because the transport code is single threaded, and since we don't `await`
+                        // after computing `exch_index` no code can remove the exchange from the session
+                        let exch = unwrap!(session.exchanges[exch_index].as_ref());
+
+                        matches!(exch.role, Role::Responder(ResponderState::AcceptPending))
+                            && f(session, exch, packet)
+                    };
+
+                    if !matches {
+                        return None;
+                    }
+
                     // `unwrap` is safe because the transport code is single threaded, and since we don't `await`
                     // after computing `exch_index` no code can remove the exchange from the session
-                    let exch = unwrap!(session.exchanges[exch_index].as_ref());
+                    let exch = unwrap!(session.exchanges[exch_index].as_mut());
 
-                    matches!(exch.role, Role::Responder(ResponderState::AcceptPending))
-                        && f(session, exch, packet)
-                };
+                    exch.role = Role::Responder(ResponderState::Owned);
 
-                if !matches {
-                    return None;
-                }
+                    let id = ExchangeId::new(session.id, exch_index);
 
-                // `unwrap` is safe because the transport code is single threaded, and since we don't `await`
-                // after computing `exch_index` no code can remove the exchange from the session
-                let exch = unwrap!(session.exchanges[exch_index].as_mut());
+                    debug!("Exchange {}: Accepted", id.display(session));
 
-                exch.role = Role::Responder(ResponderState::Owned);
+                    let exchange = ExchangeInstance::new(id, matter);
 
-                let id = ExchangeId::new(session.id, exch_index);
-
-                debug!("Exchange {}: Accepted", id.display(session));
-
-                let exchange = Exchange::new(id, matter);
-
-                Some(exchange)
+                    Some(exchange)
+                })
             })
             .await;
 
         Ok(exchange)
     }
 
-    pub async fn run<S, R>(&self, send: S, recv: R) -> Result<(), Error>
+    pub async fn run<S, R>(&self, matter: impl Matter, send: S, recv: R) -> Result<(), Error>
     where
         S: NetworkSend,
         R: NetworkReceive,
@@ -271,9 +271,9 @@ impl TransportMgr {
 
         let send = IfMutex::new(send);
 
-        let mut rx = pin!(self.process_rx(recv, &send));
+        let mut rx = pin!(self.process_rx(&matter, recv, &send));
         let mut tx = pin!(self.process_tx(&send));
-        let mut orphaned = pin!(self.process_orphaned());
+        let mut orphaned = pin!(self.process_orphaned(&matter));
 
         select3(&mut rx, &mut tx, &mut orphaned).coalesce().await
     }
@@ -332,6 +332,7 @@ impl TransportMgr {
 
     async fn process_rx<R, S>(
         &self,
+        matter: impl Matter,
         mut recv: R,
         send: &IfMutex<NoopRawMutex, S>,
     ) -> Result<(), Error>
@@ -357,7 +358,7 @@ impl TransportMgr {
             rx.buf.truncate(len);
             rx.payload_start = 0;
 
-            match self.handle_rx_packet(&mut rx, send).await {
+            match self.handle_rx_packet(&matter, &mut rx, send).await {
                 Ok(true) => {
                     // Leave the packet in place for accepting by responders
                     rx.clear_on_drop(false);
@@ -373,22 +374,22 @@ impl TransportMgr {
         }
     }
 
-    async fn process_orphaned(&self) -> Result<(), Error> {
-        let mut rx_accept_timeout = pin!(self.process_accept_timeout_rx());
-        let mut rx_orphaned = pin!(self.process_orphaned_rx());
-        let mut exch_dropped = pin!(self.process_dropped_exchanges());
+    async fn process_orphaned(&self, matter: impl Matter) -> Result<(), Error> {
+        let mut rx_accept_timeout = pin!(self.process_accept_timeout_rx(&matter));
+        let mut rx_orphaned = pin!(self.process_orphaned_rx(&matter));
+        let mut exch_dropped = pin!(self.process_dropped_exchanges(&matter));
 
         select3(&mut rx_accept_timeout, &mut rx_orphaned, &mut exch_dropped)
             .coalesce()
             .await
     }
 
-    async fn process_accept_timeout_rx(&self) -> Result<(), Error> {
+    async fn process_accept_timeout_rx(&self, matter: impl Matter) -> Result<(), Error> {
         loop {
             trace!("Waiting for accept timeout");
 
             let mut accept_timeout = pin!(self.with_locked(&self.rx, |packet| {
-                self.handle_accept_timeout_rx_packet(packet).then_some(())
+                self.handle_accept_timeout_rx_packet(&matter, packet).then_some(())
             }));
 
             let mut timer = pin!(Timer::after(embassy_time::Duration::from_millis(50)));
@@ -397,25 +398,25 @@ impl TransportMgr {
         }
     }
 
-    async fn process_orphaned_rx(&self) -> Result<(), Error> {
+    async fn process_orphaned_rx(&self, matter: impl Matter) -> Result<(), Error> {
         loop {
             trace!("Waiting for orphaned RX packets");
 
             self.with_locked(&self.rx, |packet| {
-                self.handle_orphaned_rx_packet(packet).then_some(())
+                self.handle_orphaned_rx_packet(&matter, packet).then_some(())
             })
             .await;
         }
     }
 
-    async fn process_dropped_exchanges(&self) -> Result<(), Error> {
+    async fn process_dropped_exchanges(&self, matter: impl Matter) -> Result<(), Error> {
         loop {
             trace!("Waiting for dropped exchanges");
 
             let mut tx = self.get_if(&self.tx, |packet| packet.buf.is_empty()).await;
             tx.clear_on_drop(true); // In case of error, or if the future is dropped
 
-            let wait = match self.handle_dropped_exchange(&mut tx) {
+            let wait = match self.handle_dropped_exchange(&matter, &mut tx) {
                 Ok(wait) => {
                     tx.clear_on_drop(false);
                     wait
@@ -439,13 +440,14 @@ impl TransportMgr {
 
     async fn handle_rx_packet<const N: usize, S>(
         &self,
+        matter: impl Matter,
         packet: &mut Packet<N>,
         send: &IfMutex<NoopRawMutex, S>,
     ) -> Result<bool, Error>
     where
         S: NetworkSend,
     {
-        let result = self.decode_packet(packet);
+        let result = self.decode_packet(&matter, packet);
         match result {
             Err(e) if matches!(e.code(), ErrorCode::Duplicate) => {
                 if !packet.peer.is_reliable()
@@ -453,8 +455,8 @@ impl TransportMgr {
                 {
                     debug!("\n>>RCV {}\n      => Duplicate, sending ACK", packet);
 
-                    {
-                        let mut session_mgr = self.session_mgr.borrow_mut();
+                    matter.state(|state| {
+                        let sessions = &mut state.sessions;
 
                         // `unwrap` is safe because we know we have a session.
                         // If we didn't have a session, the error code would've been `NoSession`
@@ -462,7 +464,7 @@ impl TransportMgr {
                         // Also, since the transport code is single threaded, and since we don't `await`
                         // after decoding the packet, no code can the session
                         let session =
-                            unwrap!(session_mgr.get_for_rx(&packet.peer, &packet.header.plain));
+                            unwrap!(sessions.get_for_rx(&packet.peer, &packet.header.plain));
 
                         let ack = packet.header.plain.ctr;
 
@@ -471,8 +473,8 @@ impl TransportMgr {
 
                         self.encode_packet(packet, Some(session), None, |_| {
                             Ok(Some(OpCode::MRPStandAloneAck.into()))
-                        })?;
-                    }
+                        })
+                    })?;
 
                     Self::netw_send(send, packet.peer, &packet.buf[packet.payload_start..], true)
                         .await?;
@@ -501,7 +503,7 @@ impl TransportMgr {
                     Self::netw_send(send, packet.peer, &packet.buf[packet.payload_start..], true)
                         .await?;
 
-                    if self.encode_evict_some_session(packet)? {
+                    if self.encode_evict_some_session(&matter, packet)? {
                         Self::netw_send(
                             send,
                             packet.peer,
@@ -529,8 +531,8 @@ impl TransportMgr {
                     packet
                 );
 
-                {
-                    let mut session_mgr = self.session_mgr.borrow_mut();
+                matter.state(|state| {
+                    let sessions = &mut state.sessions;
 
                     // `unwrap` is safe because we know we have a session.
                     // If we didn't have a session, the error code would've been `NoSession`
@@ -538,19 +540,19 @@ impl TransportMgr {
                     // Also, since the transport code is single threaded, and since we don't `await`
                     // after decoding the packet, no code can the session
                     let session_id =
-                        unwrap!(session_mgr.get_for_rx(&packet.peer, &packet.header.plain)).id;
+                        unwrap!(sessions.get_for_rx(&packet.peer, &packet.header.plain)).id;
 
-                    packet.header.proto.exch_id = session_mgr.get_next_exch_id();
+                    packet.header.proto.exch_id = sessions.get_next_exch_id();
                     packet.header.proto.set_initiator();
 
                     // See above why `unwrap` is safe
-                    let mut session = unwrap!(session_mgr.remove(session_id));
+                    let mut session = unwrap!(sessions.remove(session_id));
                     self.session_removed.notify();
 
                     self.encode_packet(packet, Some(&mut session), None, |wb| {
                         sc_write(wb, SCStatusCodes::CloseSession, &[])
-                    })?;
-                }
+                    })
+                })?;
 
                 Self::netw_send(send, packet.peer, &packet.buf[packet.payload_start..], true)
                     .await?;
@@ -587,14 +589,16 @@ impl TransportMgr {
                         packet
                     );
 
-                    let mut session_mgr = self.session_mgr.borrow_mut();
-                    if let Some(session_id) = session_mgr
-                        .get_for_rx(&packet.peer, &packet.header.plain)
-                        .map(|sess| sess.id)
-                    {
-                        session_mgr.remove(session_id);
-                        self.session_removed.notify();
-                    }
+                    matter.state(|state| {
+                        let sessions = &mut state.sessions;
+                        if let Some(session_id) = sessions
+                            .get_for_rx(&packet.peer, &packet.header.plain)
+                            .map(|sess| sess.id)
+                        {
+                            sessions.remove(session_id);
+                            self.session_removed.notify();
+                        }
+                    });
                 } else {
                     debug!(
                         "\n>>RCV {}\n      => Processing{}",
@@ -618,143 +622,150 @@ impl TransportMgr {
         Ok(false)
     }
 
-    fn handle_accept_timeout_rx_packet<const N: usize>(&self, packet: &mut Packet<N>) -> bool {
+    fn handle_accept_timeout_rx_packet<const N: usize>(&self, matter: impl Matter, packet: &mut Packet<N>) -> bool {
         if packet.buf.is_empty() {
             return false;
         }
 
-        let mut session_mgr = self.session_mgr.borrow_mut();
-        let epoch = session_mgr.epoch;
+        matter.state(|state| {
+            let sessions = &mut state.sessions;
+            let epoch = sessions.epoch;
 
-        let Some(session) = session_mgr.get_for_rx(&packet.peer, &packet.header.plain) else {
-            return false;
-        };
+            let Some(session) = sessions.get_for_rx(&packet.peer, &packet.header.plain) else {
+                return false;
+            };
 
-        let Some(exch_index) = session.get_exch_for_rx(&packet.header.proto) else {
-            return false;
-        };
+            let Some(exch_index) = session.get_exch_for_rx(&packet.header.proto) else {
+                return false;
+            };
 
-        // `unwrap` is safe because we know we have a session and an exchange, or else the early returns from above would've triggered
-        let exchange = unwrap!(session.exchanges[exch_index].as_mut());
+            // `unwrap` is safe because we know we have a session and an exchange, or else the early returns from above would've triggered
+            let exchange = unwrap!(session.exchanges[exch_index].as_mut());
 
-        if !matches!(
-            exchange.role,
-            Role::Responder(ResponderState::AcceptPending)
-        ) || !exchange.mrp.has_rx_timed_out(ACCEPT_TIMEOUT_MS, epoch)
-        {
-            return false;
-        }
+            if !matches!(
+                exchange.role,
+                Role::Responder(ResponderState::AcceptPending)
+            ) || !exchange.mrp.has_rx_timed_out(ACCEPT_TIMEOUT_MS, epoch)
+            {
+                return false;
+            }
 
-        warn!(
-            "\n----- {}\n => Accept timeout, marking exchange as dropped",
-            packet
-        );
-
-        exchange.role = Role::Responder(ResponderState::Dropped);
-        packet.buf.clear();
-        self.dropped.notify();
-
-        true
-    }
-
-    fn handle_orphaned_rx_packet<const N: usize>(&self, packet: &mut Packet<N>) -> bool {
-        if packet.buf.is_empty() {
-            return false;
-        }
-
-        let mut session_mgr = self.session_mgr.borrow_mut();
-
-        let Some(session) = session_mgr.get_for_rx(&packet.peer, &packet.header.plain) else {
-            warn!("\n----- {}\n => No session, dropping", packet);
-
-            packet.buf.clear();
-            return true;
-        };
-
-        let Some(exch_index) = session.get_exch_for_rx(&packet.header.proto) else {
-            warn!("\n----- {}\n => No exchange, dropping", packet);
-
-            packet.buf.clear();
-            return true;
-        };
-
-        // `unwrap` is safe because we know we have a session and an exchange, or else the early returns from above would've triggered
-        let exchange = unwrap!(session.exchanges[exch_index].as_mut());
-
-        if exchange.role.is_dropped_state() {
             warn!(
-                "\n----- {}\n => Owned by orphaned dropped {}, dropping packet",
-                packet,
-                ExchangeId::new(session.id, exch_index)
+                "\n----- {}\n => Accept timeout, marking exchange as dropped",
+                packet
             );
 
+            exchange.role = Role::Responder(ResponderState::Dropped);
             packet.buf.clear();
-            return true;
+            self.dropped.notify();
+
+            true
+        })
+    }
+
+    fn handle_orphaned_rx_packet<const N: usize>(&self, matter: impl Matter, packet: &mut Packet<N>) -> bool {
+        if packet.buf.is_empty() {
+            return false;
         }
 
-        false
+        matter.state(|state| {
+            let sessions = &mut state.sessions;
+
+            let Some(session) = sessions.get_for_rx(&packet.peer, &packet.header.plain) else {
+                warn!("\n----- {}\n => No session, dropping", packet);
+
+                packet.buf.clear();
+                return true;
+            };
+
+            let Some(exch_index) = session.get_exch_for_rx(&packet.header.proto) else {
+                warn!("\n----- {}\n => No exchange, dropping", packet);
+
+                packet.buf.clear();
+                return true;
+            };
+
+            // `unwrap` is safe because we know we have a session and an exchange, or else the early returns from above would've triggered
+            let exchange = unwrap!(session.exchanges[exch_index].as_mut());
+
+            if exchange.role.is_dropped_state() {
+                warn!(
+                    "\n----- {}\n => Owned by orphaned dropped {}, dropping packet",
+                    packet,
+                    ExchangeId::new(session.id, exch_index)
+                );
+
+                packet.buf.clear();
+                return true;
+            }
+
+            false
+        })
     }
 
     fn handle_dropped_exchange<const N: usize>(
         &self,
+        matter: impl Matter,
         packet: &mut Packet<N>,
     ) -> Result<bool, Error> {
-        let mut session_mgr = self.session_mgr.borrow_mut();
+        matter.state(|state| {
+            let mut sessions = &mut state.sessions;
 
-        let exch = session_mgr
-            .get_exch(|_, exch| exch.role.is_dropped_state() && exch.mrp.is_retrans_pending())
-            .map(|(sess, exch_index)| (sess.id, exch_index, true))
-            .or_else(|| {
-                session_mgr
-                    .get_exch(|_, exch| {
-                        exch.role.is_dropped_state() && !exch.mrp.is_retrans_pending()
-                    })
-                    .map(|(sess, exch_index)| (sess.id, exch_index, false))
-            });
+            let exch = sessions
+                .get_exch(|_, exch| exch.role.is_dropped_state() && exch.mrp.is_retrans_pending())
+                .map(|(sess, exch_index)| (sess.id, exch_index, true))
+                .or_else(|| {
+                    sessions
+                        .get_exch(|_, exch| {
+                            exch.role.is_dropped_state() && !exch.mrp.is_retrans_pending()
+                        })
+                        .map(|(sess, exch_index)| (sess.id, exch_index, false))
+                });
 
-        let Some((session_id, exch_index, close_session)) = exch else {
-            return Ok(exch.is_none());
-        };
+            let Some((session_id, exch_index, close_session)) = exch else {
+                return Ok(exch.is_none());
+            };
 
-        let exchange_id = ExchangeId::new(session_id, exch_index);
+            let exchange_id = ExchangeId::new(session_id, exch_index);
 
-        if close_session {
-            // Found a dropped exchange which has an incomplete (re)transmission
-            // Close the whole session
+            if close_session {
+                // Found a dropped exchange which has an incomplete (re)transmission
+                // Close the whole session
 
-            error!(
-                "Dropped exchange {}: Closing session because the exchange cannot be closed cleanly",
-                exchange_id.display(unwrap!(session_mgr.get(session_id))) // Session exists or else we wouldn't be here
-            );
+                error!(
+                    "Dropped exchange {}: Closing session because the exchange cannot be closed cleanly",
+                    exchange_id.display(unwrap!(sessions.get(session_id))) // Session exists or else we wouldn't be here
+                );
 
-            self.encode_evict_session(packet, &mut session_mgr, session_id)?;
-        } else {
-            // Found a dropped exchange which has no outstanding (re)transmission
-            // Send a standalone ACK if necessary and then close it
+                self.encode_evict_session(packet, &mut sessions, session_id)?;
+            } else {
+                // Found a dropped exchange which has no outstanding (re)transmission
+                // Send a standalone ACK if necessary and then close it
 
-            // `unwrap` is safe because we know we have a session and an exchange, or else the early returns from above would've triggered
-            let session = unwrap!(session_mgr.get(session_id));
-            // Ditto
-            let exchange = unwrap!(session.exchanges[exch_index].as_mut());
+                // `unwrap` is safe because we know we have a session and an exchange, or else the early returns from above would've triggered
+                let session = unwrap!(sessions.get(session_id));
+                // Ditto
+                let exchange = unwrap!(session.exchanges[exch_index].as_mut());
 
-            if exchange.mrp.is_ack_pending() {
-                self.encode_packet(packet, Some(session), Some(exch_index), |_| {
-                    Ok(Some(OpCode::MRPStandAloneAck.into()))
-                })?;
+                if exchange.mrp.is_ack_pending() {
+                    self.encode_packet(packet, Some(session), Some(exch_index), |_| {
+                        Ok(Some(OpCode::MRPStandAloneAck.into()))
+                    })?;
+                }
+
+                warn!("Dropped exchange {}: Closed", exchange_id.display(session));
+                session.exchanges[exch_index] = None;
             }
 
-            warn!("Dropped exchange {}: Closed", exchange_id.display(session));
-            session.exchanges[exch_index] = None;
-        }
-
-        Ok(exch.is_none())
+            Ok(exch.is_none())
+        })
     }
 
-    pub(crate) async fn evict_some_session(&self) -> Result<(), Error> {
+    pub(crate) async fn evict_some_session(&self, matter: impl Matter) -> Result<(), Error> {
         let mut tx = self.get_if(&self.tx, |packet| packet.buf.is_empty()).await;
         tx.clear_on_drop(true); // By default, if an error occurs
 
-        let evicted = self.encode_evict_some_session(&mut tx)?;
+        let evicted = self.encode_evict_some_session(matter, &mut tx)?;
 
         if evicted {
             // Send it
@@ -766,56 +777,58 @@ impl TransportMgr {
         }
     }
 
-    fn decode_packet<const N: usize>(&self, packet: &mut Packet<N>) -> Result<bool, Error> {
+    fn decode_packet<const N: usize>(&self, matter: impl Matter, packet: &mut Packet<N>) -> Result<bool, Error> {
         packet.header.reset();
-
-        let mut pb = ParseBuf::new(&mut packet.buf[packet.payload_start..]);
-        packet.header.plain.decode(&mut pb)?;
-
-        let mut session_mgr = self.session_mgr.borrow_mut();
-        let epoch = session_mgr.epoch;
 
         let set_payload = |packet: &mut Packet<N>, (start, end)| {
             packet.payload_start = start;
             packet.buf.truncate(end);
         };
 
-        if let Some(session) = session_mgr.get_for_rx(&packet.peer, &packet.header.plain) {
-            // Found existing session: decode, indicate packet payload slice and process further
+        matter.state(|state| {
+            let mut pb = ParseBuf::new(&mut packet.buf[packet.payload_start..]);
+            packet.header.plain.decode(&mut pb)?;
 
-            let payload_range = session.decode_remaining(&mut packet.header, pb)?;
-            set_payload(packet, payload_range);
+            let sessions = &mut state.sessions;
+            let epoch = sessions.epoch;
 
-            return session.post_recv(&packet.header, epoch);
-        }
+            if let Some(session) = sessions.get_for_rx(&packet.peer, &packet.header.plain) {
+                // Found existing session: decode, indicate packet payload slice and process further
 
-        // No existing session: we either have to create one, or return an error
+                let payload_range = session.decode_remaining(&mut packet.header, pb)?;
+                set_payload(packet, payload_range);
 
-        if !packet.header.plain.is_encrypted() {
-            // Unencrypted packets can be decoded without a session, and we need to anyway do that
-            // in order to determine (based on proto hdr data) whether to create a new session or not
-            packet.header.decode_remaining(&mut pb, 0, None)?;
-            packet.header.proto.adjust_reliability(true, &packet.peer);
-
-            let payload_range = pb.slice_range();
-            set_payload(packet, payload_range);
-
-            if MessageMeta::from(&packet.header.proto).is_new_session() {
-                // As per spec, new unencrypted sessions are only created for
-                // `PBKDFParamRequest` or `CASESigma1` unencrypted messages
-
-                let session =
-                    session_mgr.add(false, packet.peer, packet.header.plain.get_src_nodeid())?;
-
-                // Session created successfully: decode, indicate packet payload slice and process further
                 return session.post_recv(&packet.header, epoch);
             }
-        } else {
-            // Packet cannot be decoded, set packet payload to empty
-            set_payload(packet, (0, 0));
-        }
 
-        Err(ErrorCode::NoSession.into())
+            // No existing session: we either have to create one, or return an error
+
+            if !packet.header.plain.is_encrypted() {
+                // Unencrypted packets can be decoded without a session, and we need to anyway do that
+                // in order to determine (based on proto hdr data) whether to create a new session or not
+                packet.header.decode_remaining(&mut pb, 0, None)?;
+                packet.header.proto.adjust_reliability(true, &packet.peer);
+
+                let payload_range = pb.slice_range();
+                set_payload(packet, payload_range);
+
+                if MessageMeta::from(&packet.header.proto).is_new_session() {
+                    // As per spec, new unencrypted sessions are only created for
+                    // `PBKDFParamRequest` or `CASESigma1` unencrypted messages
+
+                    let session =
+                        sessions.add(false, packet.peer, packet.header.plain.get_src_nodeid())?;
+
+                    // Session created successfully: decode, indicate packet payload slice and process further
+                    return session.post_recv(&packet.header, epoch);
+                }
+            } else {
+                // Packet cannot be decoded, set packet payload to empty
+                set_payload(packet, (0, 0));
+            }
+
+            Err(ErrorCode::NoSession.into())
+        })
     }
 
     fn encode_packet<const N: usize, F>(
@@ -911,32 +924,36 @@ impl TransportMgr {
 
     fn encode_evict_some_session<const N: usize>(
         &self,
+        matter: impl Matter,
         packet: &mut Packet<N>,
     ) -> Result<bool, Error> {
-        let mut session_mgr = self.session_mgr.borrow_mut();
-        let id = session_mgr.get_session_for_eviction().map(|sess| sess.id);
-        if let Some(id) = id {
-            self.encode_evict_session(packet, &mut session_mgr, id)?;
+        matter.state(|state| {
+            let sessions = &mut state.sessions;
 
-            Ok(true)
-        } else {
-            error!("All sessions have active exchanges, cannot evict any session");
+            let id = sessions.get_session_for_eviction().map(|sess| sess.id);
+            if let Some(id) = id {
+                self.encode_evict_session(packet, sessions, id)?;
 
-            Ok(false)
-        }
+                Ok(true)
+            } else {
+                error!("All sessions have active exchanges, cannot evict any session");
+
+                Ok(false)
+            }
+        })
     }
 
     fn encode_evict_session<const N: usize>(
         &self,
         packet: &mut Packet<N>,
-        session_mgr: &mut SessionMgr,
+        sessions: &mut SessionMgr,
         id: u32,
     ) -> Result<(), Error> {
-        packet.header.proto.exch_id = session_mgr.get_next_exch_id();
+        packet.header.proto.exch_id = sessions.get_next_exch_id();
         packet.header.proto.set_initiator();
 
         // It is a responsibility of the caller to ensure that this method is called with a valid session ID
-        let mut session = unwrap!(session_mgr.remove(id));
+        let mut session = unwrap!(sessions.remove(id));
         self.session_removed.notify();
 
         debug!(

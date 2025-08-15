@@ -32,7 +32,7 @@ use crate::im::{
 };
 use crate::respond::ExchangeHandler;
 use crate::tlv::{get_root_node_struct, FromTLV, TLVElement, TLVTag, TLVWrite, TLVWriter};
-use crate::transport::exchange::{Exchange, MAX_EXCHANGE_RX_BUF_SIZE, MAX_EXCHANGE_TX_BUF_SIZE};
+use crate::transport::exchange::{Exchange, ExchangeInstance, MAX_EXCHANGE_RX_BUF_SIZE, MAX_EXCHANGE_TX_BUF_SIZE};
 use crate::utils::storage::pooled::BufferAccess;
 use crate::utils::storage::WriteBuf;
 use crate::Matter;
@@ -101,7 +101,7 @@ where
     }
 
     /// Answer a responding exchange using the `DataModelHandler` instance wrapped by this exchange handler.
-    pub async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    pub async fn handle(&self, mut exchange: impl Exchange) -> Result<(), Error> {
         let mut timeout_instant = None;
 
         loop {
@@ -117,14 +117,14 @@ where
             }
 
             match meta.opcode::<OpCode>()? {
-                OpCode::ReadRequest => self.read(exchange).await?,
+                OpCode::ReadRequest => self.read(&mut exchange).await?,
                 OpCode::WriteRequest => {
-                    repeat = self.write(exchange, timeout_instant.take()).await?;
+                    repeat = self.write(&mut exchange, timeout_instant.take()).await?;
                 }
-                OpCode::InvokeRequest => self.invoke(exchange, timeout_instant.take()).await?,
-                OpCode::SubscribeRequest => self.subscribe(exchange).await?,
+                OpCode::InvokeRequest => self.invoke(&mut exchange, timeout_instant.take()).await?,
+                OpCode::SubscribeRequest => self.subscribe(&mut exchange).await?,
                 OpCode::TimedRequest => {
-                    timeout_instant = Some(self.timed(exchange).await?);
+                    timeout_instant = Some(self.timed(&mut exchange).await?);
                     repeat = true;
                 }
                 opcode => {
@@ -144,8 +144,8 @@ where
         Ok(())
     }
 
-    async fn read(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
-        let Some(mut tx) = self.tx_buffer(exchange).await? else {
+    async fn read(&self, mut exchange: impl Exchange) -> Result<(), Error> {
+        let Some(mut tx) = self.tx_buffer(&mut exchange).await? else {
             return Ok(());
         };
 
@@ -167,7 +167,7 @@ where
             if item?
                 .map(|attr| {
                     self.handler.read_awaits(ReadContextInstance::new(
-                        exchange,
+                        &exchange,
                         &self.handler,
                         &self.buffers,
                         &attr,
@@ -191,7 +191,7 @@ where
                 .respond(
                     &self.handler,
                     &self.buffers,
-                    exchange,
+                    &exchange,
                     None,
                     &mut attrs,
                     &mut wb,
@@ -225,7 +225,7 @@ where
         // so as not to hold on to the transport layer (single) RX packet for too long
         // and block send / receive for everybody
 
-        let Some(rx) = self.rx_buffer(exchange).await? else {
+        let Some(rx) = self.rx_buffer(&mut exchange).await? else {
             return Ok(());
         };
 
@@ -240,7 +240,7 @@ where
                 .respond(
                     &self.handler,
                     &self.buffers,
-                    exchange,
+                    &exchange,
                     None,
                     &mut attrs,
                     &mut wb,
@@ -250,7 +250,7 @@ where
 
             exchange.send(OpCode::ReportData, wb.as_slice()).await?;
 
-            if more_chunks && !Self::recv_status_success(exchange).await? {
+            if more_chunks && !Self::recv_status_success(&mut exchange).await? {
                 break;
             }
 
@@ -264,7 +264,7 @@ where
 
     async fn write(
         &self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         timeout_instant: Option<Duration>,
     ) -> Result<bool, Error> {
         let req = WriteReqRef::new(TLVElement::new(exchange.rx()?.payload()));
@@ -272,11 +272,11 @@ where
 
         let timed = req.timed_request()?;
 
-        if self.timed_out(exchange, timeout_instant, timed).await? {
+        if self.timed_out(&mut exchange, timeout_instant, timed).await? {
             return Ok(false);
         }
 
-        let Some(mut tx) = self.tx_buffer(exchange).await? else {
+        let Some(mut tx) = self.tx_buffer(&mut exchange).await? else {
             return Ok(false);
         };
 
@@ -293,7 +293,7 @@ where
             if item?
                 .map(|(attr, _)| {
                     self.handler.write_awaits(WriteContextInstance::new(
-                        exchange,
+                        &exchange,
                         &self.handler,
                         &self.buffers,
                         &attr,
@@ -314,7 +314,7 @@ where
             // so as not to hold on to the transport layer (single) RX packet for too long
             // and block send / receive for everybody
 
-            let Some(rx) = self.rx_buffer(exchange).await? else {
+            let Some(rx) = self.rx_buffer(&mut exchange).await? else {
                 return Ok(false);
             };
 
@@ -323,7 +323,7 @@ where
             req.respond(
                 &self.handler,
                 &self.buffers,
-                exchange,
+                &exchange,
                 &metadata.node(),
                 self,
                 &mut wb,
@@ -336,7 +336,7 @@ where
             req.respond(
                 &self.handler,
                 &self.buffers,
-                exchange,
+                &exchange,
                 &metadata.node(),
                 self,
                 &mut wb,
@@ -351,7 +351,7 @@ where
 
     async fn invoke(
         &self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         timeout_instant: Option<Duration>,
     ) -> Result<(), Error> {
         let req = InvReqRef::new(TLVElement::new(exchange.rx()?.payload()));
@@ -359,11 +359,11 @@ where
 
         let timed = req.timed_request()?;
 
-        if self.timed_out(exchange, timeout_instant, timed).await? {
+        if self.timed_out(&mut exchange, timeout_instant, timed).await? {
             return Ok(());
         }
 
-        let Some(mut tx) = self.tx_buffer(exchange).await? else {
+        let Some(mut tx) = self.tx_buffer(&mut exchange).await? else {
             return Ok(());
         };
 
@@ -380,7 +380,7 @@ where
             if item?
                 .map(|(cmd, _)| {
                     self.handler.invoke_awaits(InvokeContextInstance::new(
-                        exchange,
+                        &exchange,
                         &self.handler,
                         &self.buffers,
                         &cmd,
@@ -401,7 +401,7 @@ where
             // so as not to hold on to the transport layer (single) RX packet for too long
             // and block send / receive for everybody
 
-            let Some(rx) = self.rx_buffer(exchange).await? else {
+            let Some(rx) = self.rx_buffer(&mut exchange).await? else {
                 return Ok(());
             };
 
@@ -410,7 +410,7 @@ where
             req.respond(
                 &self.handler,
                 &self.buffers,
-                exchange,
+                &exchange,
                 &metadata.node(),
                 self,
                 &mut wb,
@@ -424,7 +424,7 @@ where
             req.respond(
                 &self.handler,
                 &self.buffers,
-                exchange,
+                &exchange,
                 &metadata.node(),
                 self,
                 &mut wb,
@@ -438,12 +438,12 @@ where
         Ok(())
     }
 
-    async fn subscribe(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
-        let Some(rx) = self.rx_buffer(exchange).await? else {
+    async fn subscribe(&self, mut exchange: impl Exchange) -> Result<(), Error> {
+        let Some(rx) = self.rx_buffer(&mut exchange).await? else {
             return Ok(());
         };
 
-        let Some(mut tx) = self.tx_buffer(exchange).await? else {
+        let Some(mut tx) = self.tx_buffer(&mut exchange).await? else {
             return Ok(());
         };
 
@@ -535,23 +535,18 @@ where
         Ok(())
     }
 
-    pub async fn process_subscriptions(&self, matter: &Matter<'_>) -> Result<(), Error> {
+    pub async fn process_subscriptions(&self, matter: impl Matter) -> Result<(), Error> {
         loop {
             // TODO: Un-hardcode these 4 seconds of waiting when the more precise change detection logic is implemented
             let mut timeout = pin!(Timer::after(embassy_time::Duration::from_secs(4)));
             let mut notification = pin!(self.subscriptions.notification.wait());
-            let mut session_removed = pin!(matter.transport_mgr.session_removed.wait());
+            let mut session_removed = pin!(matter.transport().session_removed.wait());
 
             select3(&mut notification, &mut timeout, &mut session_removed).await;
 
             while let Some((fabric_idx, peer_node_id, session_id, id)) =
                 self.subscriptions.find_removed_session(|session_id| {
-                    matter
-                        .transport_mgr
-                        .session_mgr
-                        .borrow_mut()
-                        .get(session_id)
-                        .is_none()
+                    matter.state(|state| state.sessions.get(session_id).is_none())
                 })
             {
                 self.subscriptions.remove(None, None, Some(id));
@@ -610,7 +605,7 @@ where
                     let rx = self.subscriptions_buffers.borrow_mut().remove(index).buffer;
 
                     let result = self
-                        .process_subscription(matter, fabric_idx, peer_node_id, session_id, id, &rx)
+                        .process_subscription(&matter, fabric_idx, peer_node_id, session_id, id, &rx)
                         .await;
 
                     match result {
@@ -640,7 +635,7 @@ where
 
     async fn process_subscription(
         &self,
-        matter: &Matter<'_>,
+        matter: impl Matter,
         fabric_idx: NonZeroU8,
         peer_node_id: u64,
         session_id: Option<u32>,
@@ -648,7 +643,7 @@ where
         rx: &[u8],
     ) -> Result<bool, Error> {
         let mut exchange = if let Some(session_id) = session_id {
-            Exchange::initiate_for_session(matter, session_id)?
+            ExchangeInstance::initiate_for_session(&matter, session_id)?
         } else {
             // Commented out as we have issues on HomeKit with that:
             // https://github.com/ivmarkov/esp-idf-matter/issues/3
@@ -685,7 +680,7 @@ where
         }
     }
 
-    async fn timed(&self, exchange: &mut Exchange<'_>) -> Result<Duration, Error> {
+    async fn timed(&self, exchange: impl Exchange) -> Result<Duration, Error> {
         let req = TimedReq::from_tlv(&get_root_node_struct(exchange.rx()?.payload())?)?;
         debug!("IM: Timed request: {:?}", req);
 
@@ -698,7 +693,7 @@ where
 
     async fn timed_out(
         &self,
-        exchange: &mut Exchange<'_>,
+        exchange: impl Exchange,
         timeout_instant: Option<Duration>,
         timed_req: bool,
     ) -> Result<bool, Error> {
@@ -732,7 +727,7 @@ where
         peer_node_id: u64,
         rx: &[u8],
         tx: &mut [u8],
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         with_dataver: bool,
     ) -> Result<bool, Error>
     where
@@ -760,7 +755,7 @@ where
                     .respond(
                         &self.handler,
                         &self.buffers,
-                        exchange,
+                        &exchange,
                         Some(id),
                         &mut attrs,
                         &mut wb,
@@ -770,7 +765,7 @@ where
 
                 exchange.send(OpCode::ReportData, wb.as_slice()).await?;
 
-                if !Self::recv_status_success(exchange).await? {
+                if !Self::recv_status_success(&mut exchange).await? {
                     debug!(
                         "Subscription [F:{:x},P:{:x}]::{} removed during reporting",
                         fabric_idx, peer_node_id, id
@@ -787,8 +782,8 @@ where
         Ok(true)
     }
 
-    async fn rx_buffer(&self, exchange: &mut Exchange<'_>) -> Result<Option<B::Buffer<'a>>, Error> {
-        if let Some(mut buffer) = self.buffer(exchange).await? {
+    async fn rx_buffer(&self, mut exchange: impl Exchange) -> Result<Option<B::Buffer<'a>>, Error> {
+        if let Some(mut buffer) = self.buffer(&mut exchange).await? {
             let rx = exchange.rx()?;
 
             buffer.clear();
@@ -805,20 +800,20 @@ where
         }
     }
 
-    async fn tx_buffer(&self, exchange: &mut Exchange<'_>) -> Result<Option<B::Buffer<'a>>, Error> {
-        if let Some(mut buffer) = self.buffer(exchange).await? {
+    async fn tx_buffer(&self, mut exchange: impl Exchange) -> Result<Option<B::Buffer<'a>>, Error> {
+        if let Some(mut buffer) = self.buffer(&mut exchange).await? {
             // Always safe as `IMBuffer` is defined to be `MAX_EXCHANGE_RX_BUF_SIZE`, which is bigger than `MAX_EXCHANGE_TX_BUF_SIZE`
             unwrap!(buffer.resize_default(MAX_EXCHANGE_TX_BUF_SIZE));
 
             Ok(Some(buffer))
         } else {
-            Self::send_status(exchange, IMStatusCode::Busy).await?;
+            Self::send_status(&mut exchange, IMStatusCode::Busy).await?;
 
             Ok(None)
         }
     }
 
-    async fn buffer(&self, exchange: &mut Exchange<'_>) -> Result<Option<B::Buffer<'a>>, Error> {
+    async fn buffer(&self, exchange: impl Exchange) -> Result<Option<B::Buffer<'a>>, Error> {
         if let Some(buffer) = self.buffers.get().await {
             Ok(Some(buffer))
         } else {
@@ -828,7 +823,7 @@ where
         }
     }
 
-    async fn recv_status_success(exchange: &mut Exchange<'_>) -> Result<bool, Error> {
+    async fn recv_status_success(mut exchange: impl Exchange) -> Result<bool, Error> {
         let rx = exchange.recv().await?;
         let opcode = rx.meta().proto_opcode;
 
@@ -859,7 +854,7 @@ where
         }
     }
 
-    async fn send_status(exchange: &mut Exchange<'_>, status: IMStatusCode) -> Result<(), Error> {
+    async fn send_status(exchange: impl Exchange, status: IMStatusCode) -> Result<(), Error> {
         exchange
             .send_with(|_, wb| {
                 StatusResp::write(wb, status)?;
@@ -875,7 +870,7 @@ where
     T: DataModelHandler,
     B: BufferAccess<IMBuffer>,
 {
-    async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    async fn handle(&self, exchange: impl Exchange) -> Result<(), Error> {
         DataModel::handle(self, exchange).await
     }
 }
@@ -901,7 +896,7 @@ impl<'a> ReportDataReq<'a> {
         &self,
         handler: T,
         buffers: B,
-        exchange: &Exchange<'_>,
+        exchange: &impl Exchange,
         subscription_id: Option<u32>,
         attrs: &mut Peekable<I>,
         wb: &mut WriteBuf<'_>,
@@ -983,7 +978,7 @@ impl WriteReqRef<'_> {
         &self,
         handler: T,
         buffers: B,
-        exchange: &Exchange<'_>,
+        exchange: &impl Exchange,
         node: &Node<'_>,
         notify: &dyn ChangeNotify,
         wb: &mut WriteBuf<'_>,
@@ -1032,7 +1027,7 @@ impl InvReqRef<'_> {
         &self,
         handler: T,
         buffers: B,
-        exchange: &Exchange<'_>,
+        exchange: &impl Exchange,
         node: &Node<'_>,
         notify: &dyn ChangeNotify,
         wb: &mut WriteBuf<'_>,

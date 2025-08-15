@@ -49,7 +49,7 @@ impl ChangeNotify for () {
 /// A context super-type that is passed to the handler when processing an attribute read/write or a command invoke operation.
 pub trait Context {
     /// Return the exchange object that is associated with this operation.
-    fn exchange(&self) -> &Exchange<'_>;
+    fn exchange(&self) -> &impl Exchange;
 
     /// Return the global handler that is associated with this operation.
     ///
@@ -89,7 +89,7 @@ impl<T> Context for &T
 where
     T: Context,
 {
-    fn exchange(&self) -> &Exchange<'_> {
+    fn exchange(&self) -> &impl Exchange {
         (**self).exchange()
     }
 
@@ -177,22 +177,23 @@ where
 }
 
 /// A concrete implementation of the `ReadContext` trait
-pub(crate) struct ReadContextInstance<'a, T, B> {
-    exchange: &'a Exchange<'a>,
+pub(crate) struct ReadContextInstance<'a, E, T, B> {
+    exchange: &'a E,
     handler: T,
     buffers: B,
     attr: &'a AttrDetails<'a>,
 }
 
-impl<'a, T, B> ReadContextInstance<'a, T, B>
+impl<'a, E, T, B> ReadContextInstance<'a, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
     /// Construct a new instance.
     #[inline(always)]
     pub(crate) const fn new(
-        exchange: &'a Exchange<'a>,
+        exchange: &'a E,
         handler: T,
         buffers: B,
         attr: &'a AttrDetails<'a>,
@@ -206,12 +207,13 @@ where
     }
 }
 
-impl<T, B> Context for ReadContextInstance<'_, T, B>
+impl<'a, E, T, B> Context for ReadContextInstance<'a, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
-    fn exchange(&self) -> &Exchange<'_> {
+    fn exchange(&self) -> &impl Exchange {
         self.exchange
     }
 
@@ -232,8 +234,9 @@ where
     }
 }
 
-impl<T, B> ReadContext for ReadContextInstance<'_, T, B>
+impl<E, T, B> ReadContext for ReadContextInstance<'_, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
@@ -243,8 +246,8 @@ where
 }
 
 /// A context implementation of the `WriteContext` trait
-pub(crate) struct WriteContextInstance<'a, T, B> {
-    exchange: &'a Exchange<'a>,
+pub(crate) struct WriteContextInstance<'a, E, T, B> {
+    exchange: &'a E,
     handler: T,
     buffers: B,
     attr: &'a AttrDetails<'a>,
@@ -252,15 +255,16 @@ pub(crate) struct WriteContextInstance<'a, T, B> {
     pub(crate) notify: &'a dyn ChangeNotify,
 }
 
-impl<'a, T, B> WriteContextInstance<'a, T, B>
+impl<'a, E, T, B> WriteContextInstance<'a, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
     /// Create a new instance.
     #[inline(always)]
     pub(crate) const fn new(
-        exchange: &'a Exchange<'a>,
+        exchange: &'a E,
         handler: T,
         buffers: B,
         attr: &'a AttrDetails<'a>,
@@ -278,12 +282,13 @@ where
     }
 }
 
-impl<T, B> Context for WriteContextInstance<'_, T, B>
+impl<T, E, B> Context for WriteContextInstance<'_, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
-    fn exchange(&self) -> &Exchange<'_> {
+    fn exchange(&self) -> &impl Exchange {
         self.exchange
     }
 
@@ -305,8 +310,9 @@ where
     }
 }
 
-impl<T, B> WriteContext for WriteContextInstance<'_, T, B>
+impl<E, T, B> WriteContext for WriteContextInstance<'_, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
@@ -320,8 +326,8 @@ where
 }
 
 /// A concrete implementation of the `InvokeContext` trait
-pub(crate) struct InvokeContextInstance<'a, T, B> {
-    exchange: &'a Exchange<'a>,
+pub(crate) struct InvokeContextInstance<'a, E, T, B> {
+    exchange: &'a E,
     handler: T,
     buffers: B,
     cmd: &'a CmdDetails<'a>,
@@ -329,15 +335,16 @@ pub(crate) struct InvokeContextInstance<'a, T, B> {
     notify: &'a dyn ChangeNotify,
 }
 
-impl<'a, T, B> InvokeContextInstance<'a, T, B>
+impl<'a, E, T, B> InvokeContextInstance<'a, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
     /// Construct a new instance.
     #[inline(always)]
     pub(crate) const fn new(
-        exchange: &'a Exchange<'a>,
+        exchange: &'a E,
         handler: T,
         buffers: B,
         cmd: &'a CmdDetails<'a>,
@@ -355,12 +362,13 @@ where
     }
 }
 
-impl<T, B> Context for InvokeContextInstance<'_, T, B>
+impl<E, T, B> Context for InvokeContextInstance<'_, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {
-    fn exchange(&self) -> &Exchange<'_> {
+    fn exchange(&self) -> &impl Exchange {
         self.exchange
     }
 
@@ -382,8 +390,9 @@ where
     }
 }
 
-impl<T, B> InvokeContext for InvokeContextInstance<'_, T, B>
+impl<E, T, B> InvokeContext for InvokeContextInstance<'_, E, T, B>
 where
+    E: Exchange,
     T: AsyncHandler,
     B: BufferAccess<IMBuffer>,
 {

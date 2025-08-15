@@ -27,7 +27,8 @@ use crate::dm::{
 use crate::error::{Error, ErrorCode};
 use crate::fabric::FabricMgr;
 use crate::tlv::{TLVArray, TLVBuilderParent};
-use crate::with;
+use crate::transport::exchange::Exchange;
+use crate::{with, Matter};
 
 pub use crate::dm::clusters::decl::access_control::*;
 
@@ -155,11 +156,13 @@ impl ClusterHandler for AclHandler {
             AccessControlEntryStructBuilder<P>,
         >,
     ) -> Result<P, Error> {
-        self.acl(
-            &ctx.exchange().matter().fabric_mgr.borrow(),
-            ctx.attr(),
-            builder,
-        )
+        ctx.exchange().matter().state(|state| {
+            self.acl(
+                &state.fabrics,
+                ctx.attr(),
+                builder,
+            )
+        })
     }
 
     fn subjects_per_access_control_entry(&self, _ctx: impl ReadContext) -> Result<u16, Error> {
@@ -183,11 +186,13 @@ impl ClusterHandler for AclHandler {
         >,
     ) -> Result<(), Error> {
         let fab_idx = NonZeroU8::new(ctx.attr().fab_idx).ok_or(ErrorCode::Invalid)?;
-        self.set_acl(
-            &mut ctx.exchange().matter().fabric_mgr.borrow_mut(),
-            fab_idx,
-            value,
-        )
+        ctx.exchange().matter().state(|state| {
+            self.set_acl(
+                &mut state.fabrics,
+                fab_idx,
+                value,
+            )
+        })
     }
 }
 

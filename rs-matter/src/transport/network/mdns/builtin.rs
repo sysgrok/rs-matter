@@ -49,16 +49,19 @@ mod proto;
 /// A built-in mDNS responder for Matter, utilizing a custom mDNS protocol implementation.
 ///
 /// `no_std` and `no-alloc` and thus suitable for MCUs as well when there is no running mDNS service as part of the OS,
-pub struct BuiltinMdnsResponder<'a> {
-    matter: &'a Matter<'a>,
+pub struct BuiltinMdnsResponder<M> {
+    matter: M,
 }
 
-impl<'a> BuiltinMdnsResponder<'a> {
+impl<M> BuiltinMdnsResponder<M> 
+where 
+    M: Matter,
+{
     /// Create a new instance of the built-in mDNS responder.
     ///
     /// # Arguments
     /// * `matter` - A reference to the Matter instance that this responder will use.
-    pub const fn new(matter: &'a Matter<'a>) -> Self {
+    pub const fn new(matter: M) -> Self {
         Self { matter }
     }
 
@@ -222,7 +225,10 @@ impl<'a> BuiltinMdnsResponder<'a> {
     }
 }
 
-impl Services for BuiltinMdnsResponder<'_> {
+impl<M> Services for BuiltinMdnsResponder<M> 
+where 
+    M: Matter,
+{
     fn for_each<F>(&self, mut callback: F) -> Result<(), Error>
     where
         F: FnMut(&Service) -> Result<(), Error>,

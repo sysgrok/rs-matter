@@ -473,32 +473,35 @@ impl fmt::Display for Session {
     }
 }
 
-pub struct ReservedSession<'a> {
+pub struct ReservedSession<T> {
     id: u32,
-    session_mgr: &'a RefCell<SessionMgr>,
+    matter: T,
     complete: bool,
 }
 
-impl<'a> ReservedSession<'a> {
-    pub fn reserve_now(matter: &'a Matter<'a>) -> Result<Self, Error> {
-        let mut mgr = matter.transport_mgr.session_mgr.borrow_mut();
-
-        let id = mgr.add(true, Address::new(), None)?.id;
+impl<T> ReservedSession<T> 
+where 
+    T: Matter,
+{
+    pub fn reserve_now(matter: T) -> Result<Self, Error> {
+        let id = matter.transport_state(|state| {
+            Ok(state.sessions.add(true, Address::new(), None)?.id)
+        })?;
 
         Ok(Self {
             id,
-            session_mgr: &matter.transport_mgr.session_mgr,
+            matter,
             complete: false,
         })
     }
 
-    pub async fn reserve(matter: &'a Matter<'a>) -> Result<ReservedSession<'a>, Error> {
+    pub async fn reserve(matter: T) -> Result<Self, Error> {
         let session = Self::reserve_now(matter);
 
         if let Ok(session) = session {
             Ok(session)
         } else {
-            matter.transport_mgr.evict_some_session().await?;
+            matter.transport().evict_some_session().await?;
 
             Self::reserve_now(matter)
         }
@@ -547,7 +550,7 @@ impl<'a> ReservedSession<'a> {
     }
 }
 
-impl Drop for ReservedSession<'_> {
+impl<T> Drop for ReservedSession<T> {
     fn drop(&mut self) {
         if self.complete {
             let mut session_mgr = self.session_mgr.borrow_mut();

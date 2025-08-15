@@ -77,7 +77,7 @@ pub(crate) struct ReadReplyInstance<'a, 'b, 'c> {
 
 impl<'a, 'b, 'c> ReadReplyInstance<'a, 'b, 'c> {
     pub(crate) async fn handle_read<T: DataModelHandler, B: BufferAccess<IMBuffer>>(
-        exchange: &Exchange<'_>,
+        exchange: &impl Exchange,
         item: &Result<AttrDetails<'_>, AttrStatus>,
         handler: T,
         buffers: B,
@@ -116,7 +116,7 @@ impl<'a, 'b, 'c> ReadReplyInstance<'a, 'b, 'c> {
     }
 
     pub(crate) async fn handle_write<T: DataModelHandler, B: BufferAccess<IMBuffer>>(
-        exchange: &Exchange<'_>,
+        exchange: &impl Exchange,
         item: &Result<(AttrDetails<'_>, TLVElement<'_>), AttrStatus>,
         handler: T,
         buffers: B,
@@ -267,7 +267,7 @@ impl<'a, 'b, 'c> InvokeReplyInstance<'a, 'b, 'c> {
         handler: T,
         buffers: B,
         tw: &mut TLVWriter<'_, '_>,
-        exchange: &Exchange<'_>,
+        exchange: &impl Exchange,
         notify: &dyn ChangeNotify,
     ) -> Result<(), Error> {
         let status = match item {

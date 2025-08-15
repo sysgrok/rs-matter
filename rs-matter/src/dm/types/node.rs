@@ -59,7 +59,7 @@ impl<'a> Node<'a> {
     pub fn read<'m>(
         &'m self,
         req: &'m ReportDataReq,
-        accessor: &'m Accessor<'m>,
+        accessor: &'m Accessor,
     ) -> Result<impl Iterator<Item = Result<Result<AttrDetails<'m>, AttrStatus>, Error>> + 'm, Error>
     {
         let dataver_filters = req.dataver_filters()?;
@@ -90,7 +90,7 @@ impl<'a> Node<'a> {
     pub fn write<'m>(
         &'m self,
         req: &'m WriteReqRef,
-        accessor: &'m Accessor<'m>,
+        accessor: &'m Accessor,
     ) -> Result<
         impl Iterator<Item = Result<Result<(AttrDetails<'m>, TLVElement<'m>), AttrStatus>, Error>> + 'm,
         Error,
@@ -112,7 +112,7 @@ impl<'a> Node<'a> {
     pub fn invoke<'m>(
         &'m self,
         req: &'m InvReqRef,
-        accessor: &'m Accessor<'m>,
+        accessor: &'m Accessor,
     ) -> Result<
         impl Iterator<Item = Result<Result<(CmdDetails<'m>, TLVElement<'m>), CmdStatus>, Error>> + 'm,
         Error,
@@ -237,7 +237,7 @@ trait PathExpansionItem<'a> {
     fn expand(
         &self,
         node: &'a Node<'a>,
-        accessor: &'a Accessor<'a>,
+        accessor: &'a Accessor,
         endpoint_id: EndptId,
         cluster_id: ClusterId,
         leaf_id: u32,
@@ -261,7 +261,7 @@ impl<'a> PathExpansionItem<'a> for AttrReadPath<'a> {
     fn expand(
         &self,
         node: &'a Node<'a>,
-        accessor: &'a Accessor<'a>,
+        accessor: &'a Accessor,
         endpoint_id: EndptId,
         cluster_id: ClusterId,
         leaf_id: u32,
@@ -298,7 +298,7 @@ impl<'a> PathExpansionItem<'a> for AttrData<'a> {
     fn expand(
         &self,
         node: &'a Node<'a>,
-        accessor: &'a Accessor<'a>,
+        accessor: &'a Accessor,
         endpoint_id: EndptId,
         cluster_id: ClusterId,
         leaf_id: u32,
@@ -340,7 +340,7 @@ impl<'a> PathExpansionItem<'a> for CmdData<'a> {
     fn expand(
         &self,
         node: &'a Node<'a>,
-        _accessor: &'a Accessor<'a>,
+        _accessor: &'a Accessor,
         endpoint_id: EndptId,
         cluster_id: ClusterId,
         leaf_id: u32,
@@ -376,7 +376,7 @@ where
     /// The metatdata node to expand the paths on.
     node: &'a Node<'a>,
     /// The accessor to check the access rights.
-    accessor: &'a Accessor<'a>,
+    accessor: &'a Accessor,
     /// The paths to expand.
     items: Option<I>,
     /// The current path item being expanded.
@@ -395,7 +395,7 @@ where
     T: PathExpansionItem<'a>,
 {
     /// Create a new path expander with the given node, accessor, and paths.
-    pub const fn new(node: &'a Node<'a>, accessor: &'a Accessor<'a>, paths: Option<I>) -> Self {
+    pub const fn new(node: &'a Node<'a>, accessor: &'a Accessor, paths: Option<I>) -> Self {
         Self {
             node,
             accessor,
@@ -627,10 +627,8 @@ mod test {
         Access, Attribute, Cluster, ClusterId, Command, DeviceType, Endpoint, EndptId, Quality,
     };
     use crate::error::{Error, ErrorCode};
-    use crate::fabric::FabricMgr;
     use crate::im::GenericPath;
     use crate::im::IMStatusCode;
-    use crate::utils::cell::RefCell;
 
     use super::{Node, Operation, PathExpander, PathExpansionItem};
 
@@ -648,7 +646,7 @@ mod test {
         fn expand(
             &self,
             _node: &'a Node<'a>,
-            _accessor: &'a Accessor<'a>,
+            _accessor: &'a Accessor,
             endpoint_id: EndptId,
             cluster_id: ClusterId,
             leaf_id: u32,
@@ -671,8 +669,7 @@ mod test {
         input: &[GenericPath],
         expected: &[Result<Result<GenericPath, IMStatusCode>, ErrorCode>],
     ) {
-        let fab_mgr = RefCell::new(FabricMgr::new());
-        let accessor = Accessor::new(0, AccessorSubjects::new(0), Some(AuthMode::Pase), &fab_mgr);
+        let accessor = Accessor::new(0, AccessorSubjects::new(0), Some(AuthMode::Pase));
 
         let expander = PathExpander::new(node, &accessor, Some(input.iter().cloned().map(Ok)));
 

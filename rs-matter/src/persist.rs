@@ -61,7 +61,7 @@ pub mod fileio {
             })
         }
 
-        pub fn load(&mut self, dir: &Path, matter: &Matter) -> Result<(), Error> {
+        pub fn load(&mut self, dir: &Path, matter: impl Matter) -> Result<(), Error> {
             fs::create_dir_all(dir)?;
 
             if let Some(data) =
@@ -79,7 +79,7 @@ pub mod fileio {
             Ok(())
         }
 
-        pub fn store(&mut self, dir: &Path, matter: &Matter) -> Result<(), Error> {
+        pub fn store(&mut self, dir: &Path, matter: impl Matter) -> Result<(), Error> {
             if matter.fabrics_changed() || matter.basic_info_changed() {
                 fs::create_dir_all(dir)?;
             }
@@ -144,7 +144,7 @@ pub mod fileio {
         pub async fn run<P: AsRef<Path>>(
             &mut self,
             dir: P,
-            matter: &Matter<'_>,
+            matter: impl Matter,
         ) -> Result<(), Error> {
             self.run_with_networks(
                 dir,
@@ -157,7 +157,7 @@ pub mod fileio {
         pub async fn run_with_networks<P: AsRef<Path>, const W: usize, M, T>(
             &mut self,
             dir: P,
-            matter: &Matter<'_>,
+            matter: impl Matter,
             networks: Option<&WirelessNetworks<W, M, T>>,
         ) -> Result<(), Error>
         where
@@ -180,7 +180,7 @@ pub mod fileio {
                     match select(matter.wait_persist(), networks.wait_persist()).await {
                         Either::First(_) => {
                             matter.wait_persist().await;
-                            self.store(dir, matter)?;
+                            self.store(dir, &matter)?;
                         }
                         Either::Second(_) => {
                             networks.wait_persist().await;
@@ -189,7 +189,7 @@ pub mod fileio {
                     }
                 } else {
                     matter.wait_persist().await;
-                    self.store(dir, matter)?;
+                    self.store(dir, &matter)?;
                 }
             }
         }

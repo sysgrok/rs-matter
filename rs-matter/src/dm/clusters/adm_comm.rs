@@ -25,7 +25,9 @@ use crate::sc::pake::PaseSessionType;
 use crate::tlv::Nullable;
 
 pub use crate::dm::clusters::decl::administrator_commissioning::*;
+use crate::transport::exchange::Exchange;
 use crate::transport::session::SessionMode;
+use crate::Matter;
 
 /// The system implementation of a handler for the Administrative Commissioning Matter cluster.
 #[derive(Debug, Clone)]
@@ -58,7 +60,7 @@ impl ClusterHandler for AdminCommHandler {
     }
 
     fn window_status(&self, ctx: impl ReadContext) -> Result<CommissioningWindowStatusEnum, Error> {
-        let session_type = ctx.exchange().matter().pase_mgr.borrow().session_type();
+        let session_type = ctx.exchange().matter().state(|state| state.pase.session_type());
 
         Ok(match session_type {
             Some(PaseSessionType::Basic) => CommissioningWindowStatusEnum::BasicWindowOpen,
@@ -68,37 +70,41 @@ impl ClusterHandler for AdminCommHandler {
     }
 
     fn admin_fabric_index(&self, ctx: impl ReadContext) -> Result<Nullable<u8>, Error> {
-        let session_mgr = ctx.exchange().matter().transport_mgr.session_mgr.borrow();
+        ctx.exchange().matter().state(|state| {
+            let sessions = &state.sessions;
 
-        let fab_idx = session_mgr.iter().find_map(|session| {
-            if let SessionMode::Pase { fab_idx } = session.get_session_mode() {
-                Some(*fab_idx)
-            } else {
-                None
-            }
-        });
+            let fab_idx = sessions.iter().find_map(|session| {
+                if let SessionMode::Pase { fab_idx } = session.get_session_mode() {
+                    Some(*fab_idx)
+                } else {
+                    None
+                }
+            });
 
-        Ok(Nullable::new(fab_idx))
+            Ok(Nullable::new(fab_idx))
+        })
     }
 
     fn admin_vendor_id(&self, ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
-        let session_mgr = ctx.exchange().matter().transport_mgr.session_mgr.borrow();
-        let fabric_mgr = ctx.exchange().matter().fabric_mgr.borrow();
+        ctx.exchange().matter().state(|state| {
+            let sessions = &state.sessions;
+            let fabrics = &state.fabrics;
 
-        let fab_idx = session_mgr.iter().find_map(|session| {
-            if let SessionMode::Pase { fab_idx } = session.get_session_mode() {
-                Some(*fab_idx)
-            } else {
-                None
-            }
-        });
+            let fab_idx = sessions.iter().find_map(|session| {
+                if let SessionMode::Pase { fab_idx } = session.get_session_mode() {
+                    Some(*fab_idx)
+                } else {
+                    None
+                }
+            });
 
-        let vendor_id = fab_idx
-            .and_then(NonZeroU8::new)
-            .and_then(|idx| fabric_mgr.get(idx))
-            .map(|fabric| fabric.vendor_id());
+            let vendor_id = fab_idx
+                .and_then(NonZeroU8::new)
+                .and_then(|idx| fabrics.get(idx))
+                .map(|fabric| fabric.vendor_id());
 
-        Ok(Nullable::new(vendor_id))
+            Ok(Nullable::new(vendor_id))
+        })
     }
 
     fn handle_open_commissioning_window(
@@ -108,14 +114,16 @@ impl ClusterHandler for AdminCommHandler {
     ) -> Result<(), Error> {
         let matter = ctx.exchange().matter();
 
-        matter.pase_mgr.borrow_mut().enable_pase_session(
-            request.pake_passcode_verifier()?.0,
-            request.salt()?.0,
-            request.iterations()?,
-            request.discriminator()?,
-            request.commissioning_timeout()?,
-            &mut || matter.notify_mdns(),
-        )
+        matter.state(|state| {
+            state.pase.enable_pase_session(
+                request.pake_passcode_verifier()?.0,
+                request.salt()?.0,
+                request.iterations()?,
+                request.discriminator()?,
+                request.commissioning_timeout()?,
+                &mut || matter.notify_mdns(),
+            )
+        })
     }
 
     fn handle_open_basic_commissioning_window(
@@ -125,21 +133,24 @@ impl ClusterHandler for AdminCommHandler {
     ) -> Result<(), Error> {
         let matter = ctx.exchange().matter();
 
-        matter.pase_mgr.borrow_mut().enable_basic_pase_session(
-            matter.dev_comm().password,
-            matter.dev_comm().discriminator,
-            request.commissioning_timeout()?,
-            &mut || matter.notify_mdns(),
-        )
+        matter.state(|state| {
+            state.pase.enable_basic_pase_session(
+                matter.dev_comm().password,
+                matter.dev_comm().discriminator,
+                request.commissioning_timeout()?,
+                &mut || matter.notify_mdns(),
+            )
+        })
     }
 
     fn handle_revoke_commissioning(&self, ctx: impl InvokeContext) -> Result<(), Error> {
         let matter = ctx.exchange().matter();
 
-        matter
-            .pase_mgr
-            .borrow_mut()
-            .disable_pase_session(&mut || matter.notify_mdns())?;
+        matter.state(|state| {
+            state
+                .pase
+                .disable_pase_session(&mut || matter.notify_mdns())
+        })?;
 
         // TODO: Send status code if no commissioning window is open?
 

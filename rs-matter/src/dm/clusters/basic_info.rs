@@ -26,7 +26,7 @@ use crate::transport::exchange::Exchange;
 use crate::utils::cell::RefCell;
 use crate::utils::init::{init, Init};
 use crate::utils::storage::WriteBuf;
-use crate::with;
+use crate::{with, Matter};
 
 pub use crate::dm::clusters::decl::basic_information::*;
 
@@ -143,11 +143,11 @@ impl BasicInfoHandler {
         HandlerAdaptor(self)
     }
 
-    fn config<'a>(exchange: &'a Exchange) -> &'a BasicInfoConfig<'a> {
+    fn config<'a>(exchange: &'a impl Exchange) -> &'a BasicInfoConfig<'a> {
         exchange.matter().dev_det()
     }
 
-    fn settings<'a>(exchange: &'a Exchange) -> &'a RefCell<BasicInfoSettings> {
+    fn settings<'a>(exchange: impl Exchange) -> &'a RefCell<BasicInfoSettings> {
         &exchange.matter().basic_info_settings
     }
 }

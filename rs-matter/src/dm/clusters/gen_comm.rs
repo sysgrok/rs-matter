@@ -22,6 +22,7 @@ use crate::error::{Error, ErrorCode};
 use crate::tlv::TLVBuilderParent;
 
 pub use crate::dm::clusters::decl::general_commissioning::*;
+use crate::transport::exchange::Exchange;
 use crate::with;
 
 impl CommissioningErrorEnum {

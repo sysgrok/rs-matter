@@ -26,7 +26,7 @@ use crate::utils::epoch::Epoch;
 use crate::utils::init::{init, try_init, Init};
 use crate::utils::maybe::Maybe;
 use crate::utils::rand::Rand;
-use crate::{crypto, MatterMdnsService};
+use crate::{crypto, Matter, MatterMdnsService};
 
 use super::spake2p::{Spake2P, VerifierData, MAX_SALT_SIZE_BYTES};
 use super::SCStatusCodes;
@@ -203,7 +203,7 @@ struct Timeout {
 }
 
 impl Timeout {
-    fn new(exchange: &Exchange, epoch: Epoch) -> Self {
+    fn new<'a>(exchange: impl Exchange<'a>, epoch: Epoch) -> Self {
         Self {
             start_time: epoch(),
             exch_id: exchange.id(),
@@ -225,37 +225,37 @@ impl Pake {
 
     pub async fn handle(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         spake2p: &mut Spake2P,
     ) -> Result<(), Error> {
         let session = ReservedSession::reserve(exchange.matter()).await?;
 
-        if !self.update_timeout(exchange, true).await? {
+        if !self.update_timeout(&mut exchange, true).await? {
             return Ok(());
         }
 
-        self.handle_pbkdfparamrequest(exchange, spake2p).await?;
+        self.handle_pbkdfparamrequest(&mut exchange, spake2p).await?;
 
         exchange.recv_fetch().await?;
 
-        if !self.update_timeout(exchange, false).await? {
+        if !self.update_timeout(&mut exchange, false).await? {
             return Ok(());
         }
 
-        self.handle_pasepake1(exchange, spake2p).await?;
+        self.handle_pasepake1(&mut exchange, spake2p).await?;
 
         exchange.recv_fetch().await?;
 
-        if !self.update_timeout(exchange, false).await? {
+        if !self.update_timeout(&mut exchange, false).await? {
             return Ok(());
         }
 
-        self.handle_pasepake3(exchange, session, spake2p).await?;
+        self.handle_pasepake3(&mut exchange, session, spake2p).await?;
 
         exchange.acknowledge().await?;
         exchange.matter().notify_persist();
 
-        self.clear_timeout(exchange);
+        self.clear_timeout(&mut exchange);
 
         Ok(())
     }
@@ -263,11 +263,11 @@ impl Pake {
     #[allow(non_snake_case)]
     async fn handle_pasepake3(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         mut session: ReservedSession<'_>,
         spake2p: &mut Spake2P,
     ) -> Result<(), Error> {
-        check_opcode(exchange, OpCode::PASEPake3)?;
+        check_opcode(&mut exchange, OpCode::PASEPake3)?;
 
         let cA = extract_pasepake_1_or_3_params(exchange.rx()?.payload())?;
         let (status, ke) = spake2p.handle_cA(cA);
@@ -324,10 +324,10 @@ impl Pake {
     #[allow(non_snake_case)]
     async fn handle_pasepake1(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         spake2p: &mut Spake2P,
     ) -> Result<(), Error> {
-        check_opcode(exchange, OpCode::PASEPake1)?;
+        check_opcode(&mut exchange, OpCode::PASEPake1)?;
 
         let pA = extract_pasepake_1_or_3_params(exchange.rx()?.payload())?;
         let mut pB: [u8; 65] = [0; 65];
@@ -356,10 +356,10 @@ impl Pake {
 
     async fn handle_pbkdfparamrequest(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         spake2p: &mut Spake2P,
     ) -> Result<(), Error> {
-        check_opcode(exchange, OpCode::PBKDFParamRequest)?;
+        check_opcode(&mut exchange, OpCode::PBKDFParamRequest)?;
 
         let rx = exchange.rx()?;
 
@@ -429,7 +429,7 @@ impl Pake {
             .await
     }
 
-    fn clear_timeout(&mut self, exchange: &Exchange) {
+    fn clear_timeout<'a>(&mut self, exchange: impl Exchange) {
         let mut pase = exchange.matter().pase_mgr.borrow_mut();
 
         pase.timeout = None;
@@ -437,10 +437,10 @@ impl Pake {
 
     async fn update_timeout(
         &mut self,
-        exchange: &mut Exchange<'_>,
+        mut exchange: impl Exchange,
         new: bool,
     ) -> Result<bool, Error> {
-        if !self.check_session(exchange).await? {
+        if !self.check_session(&mut exchange).await? {
             return Ok(false);
         }
 
@@ -483,10 +483,10 @@ impl Pake {
         }
     }
 
-    async fn check_session(&mut self, exchange: &mut Exchange<'_>) -> Result<bool, Error> {
+    async fn check_session(&mut self, mut exchange: impl Exchange) -> Result<bool, Error> {
         if exchange.matter().pase_mgr.borrow().session.is_none() {
             error!("PASE not enabled");
-            complete_with_status(exchange, SCStatusCodes::InvalidParameter, &[]).await?;
+            complete_with_status(&mut exchange, SCStatusCodes::InvalidParameter, &[]).await?;
 
             Ok(false)
         } else {

@@ -31,9 +31,11 @@ use crate::tlv::{
     Nullable, Octets, OctetsArrayBuilder, OctetsBuilder, TLVBuilder, TLVBuilderParent, TLVElement,
     TLVTag, TLVWrite,
 };
+use crate::transport::exchange::Exchange;
 use crate::transport::session::SessionMode;
 use crate::utils::init::InitMaybeUninit;
 use crate::utils::storage::WriteBuf;
+use crate::Matter;
 
 use super::dev_att::{DataType, DevAttDataFetcher};
 
@@ -129,30 +131,34 @@ impl ClusterHandler for NocHandler {
         }
 
         let attr = ctx.attr();
-        let fabric_mgr = ctx.exchange().matter().fabric_mgr.borrow();
-        let mut fabrics = fabric_mgr.iter().filter(|fabric| {
-            (!attr.fab_filter || attr.fab_idx == fabric.fab_idx().get())
-                && !fabric.root_ca().is_empty()
-        });
 
-        match builder {
-            ArrayAttributeRead::ReadAll(mut builder) => {
-                for fabric in fabrics {
-                    builder = read_into(fabric, builder.push()?)?;
+        ctx.exchange().matter().state(|state| {
+            let fabrics = &state.fabrics;
+
+            let mut fabrics_iter = fabrics.iter().filter(|fabric| {
+                (!attr.fab_filter || attr.fab_idx == fabric.fab_idx().get())
+                    && !fabric.root_ca().is_empty()
+            });
+
+            match builder {
+                ArrayAttributeRead::ReadAll(mut builder) => {
+                    for fabric in fabrics_iter {
+                        builder = read_into(fabric, builder.push()?)?;
+                    }
+
+                    builder.end()
                 }
+                ArrayAttributeRead::ReadOne(index, builder) => {
+                    let fabric = fabrics_iter.nth(index as _);
 
-                builder.end()
-            }
-            ArrayAttributeRead::ReadOne(index, builder) => {
-                let fabric = fabrics.nth(index as _);
-
-                if let Some(fabric) = fabric {
-                    read_into(fabric, builder)
-                } else {
-                    Err(ErrorCode::InvalidAction.into()) // TODO
+                    if let Some(fabric) = fabric {
+                        read_into(fabric, builder)
+                    } else {
+                        Err(ErrorCode::InvalidAction.into()) // TODO
+                    }
                 }
             }
-        }
+        })
     }
 
     fn fabrics<P: TLVBuilderParent>(
@@ -181,30 +187,34 @@ impl ClusterHandler for NocHandler {
         }
 
         let attr = ctx.attr();
-        let fabric_mgr = ctx.exchange().matter().fabric_mgr.borrow();
-        let mut fabrics = fabric_mgr.iter().filter(|fabric| {
-            (!attr.fab_filter || attr.fab_idx == fabric.fab_idx().get())
-                && !fabric.root_ca().is_empty()
-        });
 
-        match builder {
-            ArrayAttributeRead::ReadAll(mut builder) => {
-                for fabric in fabrics {
-                    builder = read_into(fabric, builder.push()?)?;
+        ctx.exchange().matter().state(|state| {
+            let fabrics = &state.fabrics;
+
+            let mut fabrics_iter = fabrics.iter().filter(|fabric| {
+                (!attr.fab_filter || attr.fab_idx == fabric.fab_idx().get())
+                    && !fabric.root_ca().is_empty()
+            });
+
+            match builder {
+                ArrayAttributeRead::ReadAll(mut builder) => {
+                    for fabric in fabrics_iter {
+                        builder = read_into(fabric, builder.push()?)?;
+                    }
+
+                    builder.end()
                 }
+                ArrayAttributeRead::ReadOne(index, builder) => {
+                    let fabric = fabrics_iter.nth(index as _);
 
-                builder.end()
-            }
-            ArrayAttributeRead::ReadOne(index, builder) => {
-                let fabric = fabrics.nth(index as _);
-
-                if let Some(fabric) = fabric {
-                    read_into(fabric, builder)
-                } else {
-                    Err(ErrorCode::InvalidAction.into()) // TODO
+                    if let Some(fabric) = fabric {
+                        read_into(fabric, builder)
+                    } else {
+                        Err(ErrorCode::InvalidAction.into()) // TODO
+                    }
                 }
             }
-        }
+        })
     }
 
     fn supported_fabrics(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
@@ -212,7 +222,7 @@ impl ClusterHandler for NocHandler {
     }
 
     fn commissioned_fabrics(&self, ctx: impl ReadContext) -> Result<u8, Error> {
-        Ok(ctx.exchange().matter().fabric_mgr.borrow().iter().count() as _)
+        Ok(ctx.exchange().matter().state(|state| state.fabrics.iter().count() as _))
     }
 
     fn trusted_root_certificates<P: TLVBuilderParent>(
@@ -524,52 +534,45 @@ impl ClusterHandler for NocHandler {
 
         let fab_idx = NonZeroU8::new(request.fabric_index()?).ok_or(ErrorCode::InvalidAction)?;
 
-        let status = if ctx
-            .exchange()
-            .matter()
-            .fabric_mgr
-            .borrow_mut()
-            .remove(fab_idx, &mut || ctx.exchange().matter().notify_mdns())
-            .is_ok()
-        {
-            // If our own session is running on the fabric being removed,
-            // we need to expire it rather than immediately remove it, so that
-            // the response can be sent back properly
-            let expire_sess_id = ctx.exchange().with_session(|sess| {
-                Ok((sess.get_local_fabric_idx() == fab_idx.get()).then_some(sess.id()))
-            })?;
+        let status = ctx.exchange().state(|state| {
+            if state.fabrics
+                .remove(fab_idx, &mut || ctx.exchange().matter().notify_mdns())
+                .is_ok()
+            {
+                // If our own session is running on the fabric being removed,
+                // we need to expire it rather than immediately remove it, so that
+                // the response can be sent back properly
+                let expire_sess_id = (sess.get_local_fabric_idx() == fab_idx.get()).then_some(sess.id()));
 
-            // Remove all sessions related to the fabric being removed
-            // If `expire_sess_id` is Some, the session will be expired instead of removed.
-            ctx.exchange()
-                .matter()
-                .transport_mgr
-                .session_mgr
-                .borrow_mut()
-                .remove_for_fabric(fab_idx, expire_sess_id);
+                // Remove all sessions related to the fabric being removed
+                // If `expire_sess_id` is Some, the session will be expired instead of removed.
+                state
+                    .sessions
+                    .remove_for_fabric(fab_idx, expire_sess_id);
 
-            // Notify that the fabrics need to be persisted
-            // We need to explicitly do this because if the fabric being removed
-            // is the one on which the session is running, the session will be removed
-            // and the response will fail
-            ctx.exchange().matter().notify_persist();
+                // Notify that the fabrics need to be persisted
+                // We need to explicitly do this because if the fabric being removed
+                // is the one on which the session is running, the session will be removed
+                // and the response will fail
+                ctx.exchange().matter().notify_persist();
 
-            // Notify that a session was removed
-            ctx.exchange()
-                .matter()
-                .transport_mgr
-                .session_removed
-                .notify();
+                // Notify that a session was removed
+                ctx.exchange()
+                    .matter()
+                    .transport_mgr
+                    .session_removed
+                    .notify();
 
-            // Note that since we might have removed our own session, the exchange
-            // will terminate with a "NoSession" error, but that's OK and handled properly
+                // Note that since we might have removed our own session, the exchange
+                // will terminate with a "NoSession" error, but that's OK and handled properly
 
-            info!("Removed operational fabric with local index {}", fab_idx);
+                info!("Removed operational fabric with local index {}", fab_idx);
 
-            NodeOperationalCertStatusEnum::OK
-        } else {
-            NodeOperationalCertStatusEnum::InvalidFabricIndex
-        };
+                NodeOperationalCertStatusEnum::OK
+            } else {
+                NodeOperationalCertStatusEnum::InvalidFabricIndex
+            }
+        });
 
         response
             .status_code(status)?

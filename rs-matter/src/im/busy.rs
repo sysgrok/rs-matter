@@ -50,7 +50,7 @@ impl BusyInteractionModel {
         Self(())
     }
 
-    pub async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    pub async fn handle(&self, mut exchange: impl Exchange) -> Result<(), Error> {
         let meta = exchange.recv().await?.meta();
         if meta.proto_id != PROTO_ID_INTERACTION_MODEL {
             Err(ErrorCode::InvalidProto)?;
@@ -75,7 +75,7 @@ impl BusyInteractionModel {
 }
 
 impl ExchangeHandler for BusyInteractionModel {
-    async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    async fn handle(&self, exchange: impl Exchange) -> Result<(), Error> {
         BusyInteractionModel::handle(self, exchange).await
     }
 }

@@ -52,7 +52,7 @@ impl BusySecureChannel {
         Self(())
     }
 
-    pub async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    pub async fn handle(&self, mut exchange: impl Exchange) -> Result<(), Error> {
         let meta = exchange.recv().await?.meta();
         if meta.proto_id != PROTO_ID_SECURE_CHANNEL {
             Err(ErrorCode::InvalidProto)?;
@@ -79,7 +79,7 @@ impl BusySecureChannel {
 }
 
 impl ExchangeHandler for BusySecureChannel {
-    async fn handle(&self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+    async fn handle(&self, exchange: impl Exchange) -> Result<(), Error> {
         BusySecureChannel::handle(self, exchange).await
     }
 }
