@@ -6,3 +6,6 @@ Cargo.lock
 .devenv/
 .devenv.flake.nix
 devenv.lock
+
+# ConnectedHomeIP repository (downloaded by xtask)
+connectedhomeip/

@@ -48,7 +48,7 @@ With that said, provisioning and operating under the major Smart Home controller
 
 ## Next steps
 
-* ✅ Enable a CI that runs `rs-matter` against the ConnectedHomeIP YAML tests - **now available!**
+* ✅ Enable a CI that runs `rs-matter` against the ConnectedHomeIP YAML tests - **now available via `xtask`!**
 * More intelligent reporting on subscriptions;
 * Support for Events.
 
@@ -59,11 +59,11 @@ Also look at all [open issues](https://github.com/project-chip/rs-matter/issues)
 `rs-matter` includes comprehensive CI testing:
 
 - **Standard CI**: Runs on every push and PR with build, test, linting across multiple feature combinations
-- **ConnectedHomeIP Integration**: Nightly YAML test suite against the official Matter test cases
-  - Run automatically every night at 2:00 AM UTC
-  - Can be triggered manually via GitHub Actions
-  - Configurable test selection for iterative enablement
-  - See [`.github/workflows/README.md`](.github/workflows/README.md) for details
+- **ConnectedHomeIP Integration**: Native Rust tooling via `xtask` for running official Matter test cases
+  - Run locally during development: `./xtask.sh itest`
+  - Automated nightly CI execution
+  - Iterative test enablement workflow for developers
+  - See [`.github/workflows/README.md`](.github/workflows/README.md) for complete documentation
 
 ## How does it look like?
 

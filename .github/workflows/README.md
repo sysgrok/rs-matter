@@ -1,118 +1,181 @@
-# ConnectedHomeIP YAML Integration Tests
+# ConnectedHomeIP Integration Tests
 
-This directory contains the GitHub Actions workflow for running rs-matter against the ConnectedHomeIP YAML test suite.
+This directory contains the GitHub Actions workflow for running rs-matter against the official ConnectedHomeIP YAML test suite. The workflow uses a Rust-based `xtask` tool to enable both automated CI testing and local developer workflows.
 
-## Overview
+## Quick Start for Developers
 
-The `connectedhomeip-tests.yml` workflow runs nightly and can be triggered manually to validate rs-matter compatibility with the official Matter test cases from the ConnectedHomeIP project.
+The integration tests are implemented using a custom `xtask` tool that allows developers to run ConnectedHomeIP YAML tests locally:
 
-## Workflow Features
+```bash
+# One-time setup: Install ConnectedHomeIP and build chip-tool
+./xtask.sh itest-setup
 
-- **Nightly execution**: Runs automatically every night at 2:00 AM UTC
-- **Manual triggering**: Can be invoked manually via GitHub's workflow_dispatch
-- **Configurable tests**: Easy to enable/disable specific tests by commenting/uncommenting
-- **Caching**: Uses GitHub Actions cache for both ConnectedHomeIP builds and Rust dependencies
-- **Artifact collection**: Uploads test results and logs on failure for debugging
+# Run integration tests (builds rs-matter automatically)
+./xtask.sh itest
 
-## Test Management
+# Run specific tests
+./xtask.sh itest TestAttributesById TestBasicInformation
 
-The workflow is designed to support an iterative approach to test enablement:
+# Run tests with release build
+./xtask.sh itest --profile release
 
-### Currently Enabled Tests
-- `TestAttributesById` - Tests attribute access by ID
+# Just build rs-matter examples
+./xtask.sh build
 
-### Currently Disabled Tests (Available for Enablement)
-- `TestAccessControlCluster` - Tests access control functionality
-- `TestBasicInformation` - Tests basic device information cluster
-
-### How to Enable/Disable Tests
-
-Tests can be easily enabled or disabled by editing the workflow file manually:
-
-1. Open `.github/workflows/connectedhomeip-tests.yml`
-2. Find the "Run YAML Integration Tests" step
-3. Locate the test you want to enable/disable in the comments
-4. To **enable** a test: Remove the `#` comment characters from both the echo and test command lines
-5. To **disable** a test: Add `#` comment characters to both the echo and test command lines
-
-Example:
-```yaml
-# DISABLED TEST:
-# echo "Running TestAccessControlCluster..."
-# ${CHIP_HOME}/scripts/run_in_build_env.sh \
-#   "${CHIP_HOME}/scripts/tests/run_test_suite.py \
-#   --log-level warn --target TestAccessControlCluster \
-#   ...rest of command"
-
-# ENABLED TEST:
-echo "Running TestAccessControlCluster..."
-${CHIP_HOME}/scripts/run_in_build_env.sh \
-  "${CHIP_HOME}/scripts/tests/run_test_suite.py \
-  --log-level warn --target TestAccessControlCluster \
-  ...rest of command"
+# Get help for any command
+./xtask.sh --help
+./xtask.sh itest --help
 ```
 
-**Important**: Make sure to uncomment/comment ALL lines belonging to a test (both the echo statement and the full test command which may span multiple lines).
+## Available Commands
 
-### Adding New Tests
+### `itest-setup`
+Sets up the ConnectedHomeIP environment for integration testing:
+- Clones the ConnectedHomeIP repository (if not already present)
+- Sets up Python virtual environment with required dependencies
+- Builds chip-tool (if not cached)
 
-To add a new test:
+Options:
+- `--connectedhomeip-ref <REF>`: Specify ConnectedHomeIP branch/tag/commit (default: master)
+- `--force-rebuild`: Force rebuild even if cached
 
-1. Follow the pattern shown in the workflow file
-2. Add both an echo statement and the test execution command
-3. Initially add the test in commented form for review
-4. Test locally or in a PR before enabling in the main branch
+### `build`
+Builds rs-matter examples with the specified configuration:
+- Builds the `onoff_light` example by default
+- Configurable build profile and features
 
-Example format:
-```yaml
-# New Test Example
-# echo "Running TestNewCluster..."
-# ${CHIP_HOME}/scripts/run_in_build_env.sh "${CHIP_HOME}/scripts/tests/run_test_suite.py --log-level warn --target TestNewCluster --runner chip_tool_python --chip-tool ${CHIP_HOME}/out/host/chip-tool run --iterations 1 --test-timeout-seconds 120 --all-clusters-app ${RS_MATTER}/target/debug/examples/onoff_light --lock-app ${RS_MATTER}/target/debug/examples/onoff_light"
+Options:
+- `--profile <PROFILE>`: Build profile (debug or release, default: debug)
+- `--features <FEATURES>`: Additional cargo features
+
+### `itest`
+Runs ConnectedHomeIP YAML integration tests:
+- Automatically builds rs-matter unless `--skip-build` is used
+- Runs specified tests or all enabled tests if none specified
+
+Options:
+- `--profile <PROFILE>`: Build profile for rs-matter examples (default: debug)
+- `--timeout <TIMEOUT>`: Timeout for each test in seconds (default: 120)
+- `--skip-build`: Skip building rs-matter (assume it's already built)
+
+## Configuring Tests
+
+Currently enabled tests are hardcoded in the `xtask` tool. To modify which tests run by default, edit the `get_enabled_tests()` function in `xtask/src/main.rs`.
+
+Available tests include:
+- `TestAttributesById` (currently enabled)
+- `TestAccessControlCluster` 
+- `TestBasicInformation`
+
+## Developer Workflow
+
+The typical developer workflow for working with integration tests:
+
+1. **Initial setup** (one time):
+   ```bash
+   ./xtask.sh itest-setup
+   ```
+
+2. **Iterative development**:
+   ```bash
+   # Run a specific test
+   ./xtask.sh itest TestBasicInformation
+   
+   # Fix rs-matter implementation based on test results
+   # ... make code changes ...
+   
+   # Run the test again (rs-matter will be rebuilt automatically)
+   ./xtask.sh itest TestBasicInformation
+   ```
+
+3. **Adding new tests**:
+   - Add the test name to the enabled tests list in `xtask/src/main.rs`
+   - Run the test to see if it passes
+   - If it fails, create an issue and fix the rs-matter implementation
+   - Continue until the test passes
+
+## System Requirements
+
+Before running integration tests, ensure you have:
+- **Rust toolchain** (stable)
+- **Python 3** with pip and venv
+- **Git**
+- **System libraries**: libdbus-1-dev, pkg-config
+
+The `xtask` tool will check for these dependencies and report any missing ones.
+
+## GitHub Actions Workflow
+
+The automated CI workflow (`connectedhomeip-tests.yml`) uses the same `xtask` tool:
+
+1. **Nightly Schedule**: Runs every night at 2:00 AM UTC
+2. **Manual Trigger**: Can be triggered manually with configurable ConnectedHomeIP reference
+3. **Caching**: Caches both ConnectedHomeIP builds and Rust dependencies
+4. **Artifact Collection**: Uploads test results and logs on failure
+
+### Manual Workflow Execution
+
+You can manually trigger the workflow via GitHub's web interface or the `gh` CLI:
+
+```bash
+# Trigger with default settings (master branch of ConnectedHomeIP)
+gh workflow run connectedhomeip-tests.yml
+
+# Trigger with specific ConnectedHomeIP reference
+gh workflow run connectedhomeip-tests.yml --field connectedhomeip_ref=v1.3-branch
 ```
-
-## Test Categories
-
-Tests are organized by priority:
-
-1. **System/Utility Clusters** (Current focus)
-   - Access Control
-   - Basic Information  
-   - General Diagnostics
-   - Network Commissioning
-   - etc.
-
-2. **Application Clusters** (Future focus)
-   - OnOff
-   - Level Control
-   - Color Control
-   - etc.
-
-## Manual Execution
-
-To run the workflow manually:
-
-1. Go to the Actions tab in the GitHub repository
-2. Select "ConnectedHomeIP YAML Integration Tests"
-3. Click "Run workflow"
-4. Optionally specify a different ConnectedHomeIP branch/commit
-5. Click "Run workflow" to start
 
 ## Troubleshooting
 
-If tests fail:
+### Common Issues
 
-1. Check the workflow logs in the GitHub Actions tab
-2. Download the uploaded artifacts which contain:
-   - Test output logs
-   - rs-matter temporary data
-   - chip-tool logs
-3. Look for specific test failures and error messages
-4. Compare with the original shell script (`chip-tool-tests.sh`) for reference
+1. **Missing system dependencies**:
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y libdbus-1-dev pkg-config git python3 python3-pip python3-venv
+   ```
 
-## Development Workflow
+2. **ConnectedHomeIP build failures**:
+   ```bash
+   # Force rebuild of ConnectedHomeIP
+   ./xtask.sh itest-setup --force-rebuild
+   ```
 
-1. When a test fails, create an issue describing the failure
-2. Developers fix the issue in rs-matter
-3. Once fixed, the test should pass in subsequent runs
-4. Continue enabling more tests iteratively
-5. The goal is to eventually pass all Matter utility/system cluster tests
+3. **Python environment issues**:
+   ```bash
+   # Clean up and rebuild ConnectedHomeIP environment
+   rm -rf connectedhomeip/venv
+   ./xtask.sh itest-setup --force-rebuild
+   ```
+
+### Debug Output
+
+For more verbose output during test execution, you can modify the log level in the xtask tool or run with RUST_LOG:
+
+```bash
+RUST_LOG=debug ./xtask.sh itest
+```
+
+### Test Data Location
+
+Test data is stored in temporary directories (under `/tmp/`). If you need to examine test artifacts after a failure, check the console output for the specific temporary directory path.
+
+## Architecture
+
+The integration test system consists of:
+
+1. **xtask tool** (`xtask/`): Rust-based task runner
+   - Handles ConnectedHomeIP setup and environment management
+   - Builds rs-matter examples with proper features
+   - Executes YAML tests with proper environment variables
+
+2. **GitHub Actions workflow** (`.github/workflows/connectedhomeip-tests.yml`):
+   - Uses the xtask tool for all operations
+   - Provides caching and artifact collection
+   - Runs on schedule and manual triggers
+
+3. **Integration with existing tooling**:
+   - Uses the same ConnectedHomeIP test infrastructure as the original shell script
+   - Maintains compatibility with chip-tool and test runners
+
+This architecture ensures that developers can run the same tests locally that run in CI, enabling efficient debugging and development of Matter protocol compliance.
