@@ -1,0 +1,187 @@
+---
+name: ConnectedHomeIP YAML Integration Tests
+
+on:
+  schedule:
+    # Run every night at 2:00 AM UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      connectedhomeip_ref:
+        description: 'ConnectedHomeIP repository reference (branch/tag/commit)'
+        required: false
+        default: 'master'
+        type: string
+
+env:
+  RUST_TOOLCHAIN: stable
+  CARGO_TERM_COLOR: always
+
+jobs:
+  yaml_integration_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            pkg-config \
+            git \
+            python3 \
+            python3-pip \
+            python3-venv
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Checkout rs-matter
+        uses: actions/checkout@v4
+        with:
+          path: rs-matter
+
+      - name: Checkout ConnectedHomeIP
+        uses: actions/checkout@v4
+        with:
+          repository: project-chip/connectedhomeip
+          ref: ${{ inputs.connectedhomeip_ref || 'master' }}
+          path: connectedhomeip
+          submodules: recursive
+
+      - name: Cache ConnectedHomeIP build
+        uses: actions/cache@v4
+        with:
+          path: connectedhomeip/out
+          key: >-
+            ${{ runner.os }}-connectedhomeip-${{
+            hashFiles('connectedhomeip/**/*.py',
+            'connectedhomeip/**/*.sh', 'connectedhomeip/**/BUILD.gn') }}
+          restore-keys: |
+            ${{ runner.os }}-connectedhomeip-
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rs-matter/target
+          key: >-
+            ${{ runner.os }}-cargo-${{
+            hashFiles('rs-matter/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup ConnectedHomeIP environment
+        working-directory: connectedhomeip
+        run: |
+          # Install Python dependencies for the test runner
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip wheel
+          pip install -r scripts/requirements.txt
+
+          # Setup the build environment
+          source scripts/activate.sh
+
+          # Bootstrap and build chip-tool if not cached
+          if [ ! -f "out/host/chip-tool" ]; then
+            echo "Building chip-tool..."
+            gn gen out/host \
+              --args='target_os="linux" target_cpu="x64" is_debug=false'
+            ninja -C out/host chip-tool
+          else
+            echo "Using cached chip-tool"
+          fi
+
+      - name: Build rs-matter examples
+        working-directory: rs-matter
+        run: |
+          cargo build --bin onoff_light --features os,rustcrypto,log
+
+      - name: Run YAML Integration Tests
+        working-directory: rs-matter
+        env:
+          CHIP_HOME: ../connectedhomeip
+          RS_MATTER: ${{ github.workspace }}/rs-matter
+          RS_MATTER_DATA: /tmp/rs-matter
+        run: |
+          # Clean up any previous test data
+          rm -rf ${RS_MATTER_DATA}
+
+          # Activate ConnectedHomeIP environment
+          cd ${CHIP_HOME}
+          source venv/bin/activate
+          source scripts/activate.sh
+
+          # List of YAML tests to run
+          # Comment/uncomment tests to enable/disable them
+          # Each test should be on its own line for easy management
+
+          echo "Running enabled YAML tests..."
+
+          # System/Utility Cluster Tests (Priority)
+          # Uncomment the tests below to enable them:
+
+          # Access Control Cluster Test
+          # echo "Running TestAccessControlCluster..."
+          # ${CHIP_HOME}/scripts/run_in_build_env.sh \
+          #   "${CHIP_HOME}/scripts/tests/run_test_suite.py \
+          #   --log-level warn --target TestAccessControlCluster \
+          #   --runner chip_tool_python \
+          #   --chip-tool ${CHIP_HOME}/out/host/chip-tool run \
+          #   --iterations 1 --test-timeout-seconds 120 \
+          #   --all-clusters-app ${RS_MATTER}/target/debug/examples/onoff_light \
+          #   --lock-app ${RS_MATTER}/target/debug/examples/onoff_light"
+
+          # Basic Information Cluster Test
+          # echo "Running TestBasicInformation..."
+          # ${CHIP_HOME}/scripts/run_in_build_env.sh \
+          #   "${CHIP_HOME}/scripts/tests/run_test_suite.py \
+          #   --log-level warn --target TestBasicInformation \
+          #   --runner chip_tool_python \
+          #   --chip-tool ${CHIP_HOME}/out/host/chip-tool run \
+          #   --iterations 1 --test-timeout-seconds 120 \
+          #   --all-clusters-app ${RS_MATTER}/target/debug/examples/onoff_light \
+          #   --lock-app ${RS_MATTER}/target/debug/examples/onoff_light"
+
+          # Attributes By ID Test (Currently Enabled)
+          echo "Running TestAttributesById..."
+          ${CHIP_HOME}/scripts/run_in_build_env.sh \
+            "${CHIP_HOME}/scripts/tests/run_test_suite.py \
+            --log-level warn --target TestAttributesById \
+            --runner chip_tool_python \
+            --chip-tool ${CHIP_HOME}/out/host/chip-tool run \
+            --iterations 1 --test-timeout-seconds 120 \
+            --all-clusters-app ${RS_MATTER}/target/debug/examples/onoff_light \
+            --lock-app ${RS_MATTER}/target/debug/examples/onoff_light"
+
+          # Additional System/Utility Tests
+          # Add more tests here as they are validated and ready to be enabled
+          # Example format:
+          # echo "Running TestNewCluster..."
+          # ${CHIP_HOME}/scripts/run_in_build_env.sh \
+          #   "${CHIP_HOME}/scripts/tests/run_test_suite.py \
+          #   --log-level warn --target TestNewCluster \
+          #   --runner chip_tool_python \
+          #   --chip-tool ${CHIP_HOME}/out/host/chip-tool run \
+          #   --iterations 1 --test-timeout-seconds 120 \
+          #   --all-clusters-app ${RS_MATTER}/target/debug/examples/onoff_light \
+          #   --lock-app ${RS_MATTER}/target/debug/examples/onoff_light"
+
+          echo "YAML integration tests completed successfully!"
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            /tmp/rs-matter/
+            connectedhomeip/out/host/chip-tool.log
+          retention-days: 7
