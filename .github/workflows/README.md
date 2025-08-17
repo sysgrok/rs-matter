@@ -8,23 +8,23 @@ The integration tests are implemented using a custom `xtask` tool that allows de
 
 ```bash
 # One-time setup: Install ConnectedHomeIP and build chip-tool
-./xtask.sh itest-setup
+cargo xtask itest-setup
 
 # Run integration tests (builds rs-matter automatically)
-./xtask.sh itest
+cargo xtask itest
 
 # Run specific tests
-./xtask.sh itest TestAttributesById TestBasicInformation
+cargo xtask itest TestAttributesById TestBasicInformation
 
 # Run tests with release build
-./xtask.sh itest --profile release
+cargo xtask itest --profile release
 
 # Just build rs-matter examples
-./xtask.sh build
+cargo xtask build
 
 # Get help for any command
-./xtask.sh --help
-./xtask.sh itest --help
+cargo xtask --help
+cargo xtask itest --help
 ```
 
 ## Available Commands
@@ -73,19 +73,19 @@ The typical developer workflow for working with integration tests:
 
 1. **Initial setup** (one time):
    ```bash
-   ./xtask.sh itest-setup
+   cargo xtask itest-setup
    ```
 
 2. **Iterative development**:
    ```bash
    # Run a specific test
-   ./xtask.sh itest TestBasicInformation
+   cargo xtask itest TestBasicInformation
    
    # Fix rs-matter implementation based on test results
    # ... make code changes ...
    
    # Run the test again (rs-matter will be rebuilt automatically)
-   ./xtask.sh itest TestBasicInformation
+   cargo xtask itest TestBasicInformation
    ```
 
 3. **Adding new tests**:
@@ -138,14 +138,14 @@ gh workflow run connectedhomeip-tests.yml --field connectedhomeip_ref=v1.3-branc
 2. **ConnectedHomeIP build failures**:
    ```bash
    # Force rebuild of ConnectedHomeIP
-   ./xtask.sh itest-setup --force-rebuild
+   cargo xtask itest-setup --force-rebuild
    ```
 
 3. **Python environment issues**:
    ```bash
    # Clean up and rebuild ConnectedHomeIP environment
    rm -rf connectedhomeip/venv
-   ./xtask.sh itest-setup --force-rebuild
+   cargo xtask itest-setup --force-rebuild
    ```
 
 ### Debug Output
@@ -153,7 +153,7 @@ gh workflow run connectedhomeip-tests.yml --field connectedhomeip_ref=v1.3-branc
 For more verbose output during test execution, you can modify the log level in the xtask tool or run with RUST_LOG:
 
 ```bash
-RUST_LOG=debug ./xtask.sh itest
+RUST_LOG=debug cargo xtask itest
 ```
 
 ### Test Data Location

@@ -71,12 +71,12 @@ jobs:
 
       - name: Setup ConnectedHomeIP environment
         run: |
-          ./xtask.sh itest-setup \
+          cargo xtask itest-setup \
             --connectedhomeip-ref "${{ inputs.connectedhomeip_ref || 'master' }}"
 
       - name: Run YAML Integration Tests
         run: |
-          ./xtask.sh itest
+          cargo xtask itest
 
       - name: Upload test results on failure
         if: failure()

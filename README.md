@@ -60,7 +60,7 @@ Also look at all [open issues](https://github.com/project-chip/rs-matter/issues)
 
 - **Standard CI**: Runs on every push and PR with build, test, linting across multiple feature combinations
 - **ConnectedHomeIP Integration**: Native Rust tooling via `xtask` for running official Matter test cases
-  - Run locally during development: `./xtask.sh itest`
+  - Run locally during development: `cargo xtask itest`
   - Automated nightly CI execution
   - Iterative test enablement workflow for developers
   - See [`.github/workflows/README.md`](.github/workflows/README.md) for complete documentation

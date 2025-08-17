@@ -14,8 +14,8 @@ The `xtask` tool provides a unified, cross-platform way for developers to:
 From the rs-matter root directory:
 
 ```bash
-# Run via wrapper script (recommended)
-./xtask.sh --help
+# Run via cargo alias (recommended)
+cargo xtask --help
 
 # Or run directly
 cd xtask && cargo run -- --help
