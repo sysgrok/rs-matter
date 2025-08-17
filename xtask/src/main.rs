@@ -48,28 +48,27 @@ enum Commands {
     },
 }
 
-const DEFAULT_FEATURES: &[&str] = &["os", "rustcrypto", "log"];
+const DEFAULT_FEATURES: &[&str] = &["log"];
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
         Commands::ItestSetup { connectedhomeip_ref, force_rebuild } => {
-            setup_connectedhomeip(connectedhomeip_ref, *force_rebuild).await
+            setup_connectedhomeip(connectedhomeip_ref, *force_rebuild)
         }
         Commands::Build { profile, features } => {
-            build_rs_matter(profile, features).await
+            build_rs_matter(profile, features)
         }
         Commands::Itest { tests, profile, timeout, skip_build } => {
-            run_integration_tests(tests, profile, *timeout, *skip_build).await
+            run_integration_tests(tests, profile, *timeout, *skip_build)
         }
     }
 }
 
-async fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -> Result<()> {
+fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -> Result<()> {
     let project_root = get_project_root()?;
-    let connectedhomeip_dir = project_root.join("connectedhomeip");
+    let connectedhomeip_dir = project_root.join(".build/itest/connectedhomeip");
 
     println!("Setting up ConnectedHomeIP environment...");
 
@@ -79,6 +78,11 @@ async fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -
     // Clone or update ConnectedHomeIP repository
     if !connectedhomeip_dir.exists() {
         println!("Cloning ConnectedHomeIP repository...");
+        // Ensure parent directories exist
+        if let Some(parent) = connectedhomeip_dir.parent() {
+            std::fs::create_dir_all(parent)
+                .context("Failed to create parent directories for ConnectedHomeIP")?;
+        }
         run_command(
             Command::new("git")
                 .args(&["clone", "--recurse-submodules", 
@@ -127,7 +131,7 @@ async fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -
     Ok(())
 }
 
-async fn build_rs_matter(profile: &str, additional_features: &[String]) -> Result<()> {
+fn build_rs_matter(profile: &str, additional_features: &[String]) -> Result<()> {
     let project_root = get_project_root()?;
     let examples_dir = project_root.join("examples");
 
@@ -151,14 +155,14 @@ async fn build_rs_matter(profile: &str, additional_features: &[String]) -> Resul
     Ok(())
 }
 
-async fn run_integration_tests(
+fn run_integration_tests(
     tests: &[String],
     profile: &str,
     timeout: u64,
     skip_build: bool,
 ) -> Result<()> {
     let project_root = get_project_root()?;
-    let connectedhomeip_dir = project_root.join("connectedhomeip");
+    let connectedhomeip_dir = project_root.join(".build/itest/connectedhomeip");
 
     // Verify ConnectedHomeIP is set up
     if !connectedhomeip_dir.exists() {
@@ -176,7 +180,7 @@ async fn run_integration_tests(
 
     // Build rs-matter if requested
     if !skip_build {
-        build_rs_matter(profile, &[]).await?;
+        build_rs_matter(profile, &[])?;
     }
 
     // Determine which tests to run
@@ -205,9 +209,9 @@ async fn run_integration_tests(
 
     let profile_dir = if profile == "release" { "release" } else { "debug" };
     let onoff_light_path = project_root
-        .join("examples/target")
+        .join("target")
         .join(profile_dir)
-        .join("examples/onoff_light");
+        .join("onoff_light");
 
     // Run each test
     for test_name in tests_to_run {

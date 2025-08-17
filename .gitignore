@@ -7,5 +7,5 @@ Cargo.lock
 .devenv.flake.nix
 devenv.lock
 
-# ConnectedHomeIP repository (downloaded by xtask)
-connectedhomeip/
+# Build artifacts and temporary files
+.build/
