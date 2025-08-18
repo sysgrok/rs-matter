@@ -160,7 +160,7 @@ fn build_rs_matter(profile: &str, additional_features: &[String]) -> Result<()> 
     let features_str = features.join(",");
 
     let mut cmd = Command::new("cargo");
-    cmd.args(&["build", "--bin", "onoff_light"])
+    cmd.args(&["build", "--bin", "chip_tool_tests"])
         .arg("--features").arg(&features_str)
         .current_dir(&examples_dir);
 
@@ -226,15 +226,15 @@ fn run_integration_tests(
     }
 
     let profile_dir = if profile == "release" { "release" } else { "debug" };
-    let onoff_light_path = project_root
+    let chip_tool_tests_path = project_root
         .join("target")
         .join(profile_dir)
-        .join("onoff_light");
+        .join("chip_tool_tests");
 
     // Run each test
     for test_name in tests_to_run {
         println!("\n=== Running test: {} ===", test_name);
-        run_yaml_test(&connectedhomeip_dir, &test_name, &onoff_light_path, timeout)?;
+        run_yaml_test(&connectedhomeip_dir, &test_name, &chip_tool_tests_path, timeout)?;
     }
 
     println!("\nAll integration tests completed successfully!");
@@ -244,7 +244,7 @@ fn run_integration_tests(
 fn run_yaml_test(
     connectedhomeip_dir: &Path,
     test_name: &str,
-    onoff_light_path: &Path,
+    chip_tool_tests_path: &Path,
     timeout: u64,
 ) -> Result<()> {
     let script_path = connectedhomeip_dir.join("scripts/run_in_build_env.sh");
@@ -257,8 +257,8 @@ fn run_yaml_test(
         test_name,
         chip_tool_path.display(),
         timeout,
-        onoff_light_path.display(),
-        onoff_light_path.display()
+        chip_tool_tests_path.display(),
+        chip_tool_tests_path.display()
     );
 
     let mut cmd = Command::new(&script_path);
