@@ -33,8 +33,15 @@ Install required system dependencies first:
 
 ### Lint and Format Commands
 - **Format check**: `cargo fmt -- --check` -- takes 1 second.
+- **Apply formatting**: `cargo fmt` -- applies formatting fixes automatically.
 - **Clippy (warnings only)**: `cargo clippy --no-deps --no-default-features --features rustcrypto,os,log` -- takes 25 seconds. Set timeout to 1+ minutes.
 - **Note**: Clippy with `-Dwarnings` will fail due to lifetime warning issues in the codebase. Use without `-Dwarnings` for warnings-only mode.
+
+### PR Quality Requirements
+All PRs must meet these minimum requirements before submission:
+- **Apply formatting**: `cargo fmt` must be applied with no formatting issues
+- **Pass linting**: `cargo clippy --no-deps --no-default-features --features rustcrypto,os,log` must run without warnings
+- **Pass tests**: `cargo test -- --test-threads 1` must succeed without errors
 
 ### Feature Sets
 Platform-specific mDNS implementations (choose based on target platform):

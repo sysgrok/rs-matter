@@ -30,7 +30,9 @@ use log::info;
 use rs_matter::dm::clusters::desc::{self, ClusterHandler as _};
 use rs_matter::dm::clusters::net_comm::NetworkType;
 use rs_matter::dm::clusters::on_off::{ClusterHandler as _, OnOffHandler};
-use rs_matter::dm::clusters::unit_testing::{ClusterHandler as _, UnitTestingHandler, UnitTestingHandlerData};
+use rs_matter::dm::clusters::unit_testing::{
+    ClusterHandler as _, UnitTestingHandler, UnitTestingHandlerData,
+};
 use rs_matter::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 use rs_matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter::dm::endpoints;
@@ -59,7 +61,8 @@ mod mdns;
 // `rs-matter` supports efficient initialization of BSS objects (with `init`)
 // as well as just allocating the objects on-stack or on the heap.
 static MATTER: StaticCell<Matter> = StaticCell::new();
-static BUFFERS: StaticCell<PooledBuffers<10, NoopRawMutex, rs_matter::dm::IMBuffer>> = StaticCell::new();
+static BUFFERS: StaticCell<PooledBuffers<10, NoopRawMutex, rs_matter::dm::IMBuffer>> =
+    StaticCell::new();
 static SUBSCRIPTIONS: StaticCell<Subscriptions<3>> = StaticCell::new();
 static PSM: StaticCell<Psm<4096>> = StaticCell::new();
 static UNIT_TESTING_DATA: StaticCell<RefCell<UnitTestingHandlerData>> = StaticCell::new();
@@ -67,7 +70,7 @@ static UNIT_TESTING_DATA: StaticCell<RefCell<UnitTestingHandlerData>> = StaticCe
 fn main() -> Result<(), Error> {
     // Enable detailed backtraces for debugging RefCell borrowing issues
     std::env::set_var("RUST_BACKTRACE", "1");
-    
+
     // Special logging configuration compatible with ConnectedHomeIP YAML tests
     // Log to stdout with simplified format at debug level as required by chip-tool tests
     env_logger::builder()
@@ -105,7 +108,9 @@ fn main() -> Result<(), Error> {
     let subscriptions = SUBSCRIPTIONS.uninit().init_with(Subscriptions::init());
 
     // Our unit testing cluster data
-    let unit_testing_data = UNIT_TESTING_DATA.uninit().init_with(RefCell::init(UnitTestingHandlerData::init()));
+    let unit_testing_data = UNIT_TESTING_DATA
+        .uninit()
+        .init_with(RefCell::init(UnitTestingHandlerData::init()));
 
     // Assemble our Data Model handler by composing the predefined Root Endpoint handler with our cluster handlers
     let dm_handler = dm_handler(matter, unit_testing_data);
@@ -142,7 +147,10 @@ fn main() -> Result<(), Error> {
     info!(
         "Persist memory: Persist (BSS)={}B, Persist fut (stack)={}B",
         core::mem::size_of::<Psm<4096>>(),
-        core::mem::size_of_val(&psm.run(std::env::temp_dir().join("rs-matter-chip-tool-tests"), matter))
+        core::mem::size_of_val(&psm.run(
+            std::env::temp_dir().join("rs-matter-chip-tool-tests"),
+            matter
+        ))
     );
 
     // Clean up any previous test data to ensure a fresh start for each test run
@@ -158,12 +166,7 @@ fn main() -> Result<(), Error> {
     let mut persist = pin!(psm.run(dir, matter));
 
     // Combine all async tasks in a single one
-    let all = select4(
-        &mut transport,
-        &mut mdns,
-        &mut persist,
-        &mut respond,
-    );
+    let all = select4(&mut transport, &mut mdns, &mut persist, &mut respond);
 
     // Run with a simple `block_on`. Any local executor would do.
     futures_lite::future::block_on(all.coalesce())
@@ -212,7 +215,13 @@ fn dm_handler<'a>(
                     )
                     .chain(
                         EpClMatcher::new(Some(1), Some(UnitTestingHandler::CLUSTER.id)),
-                        Async(UnitTestingHandler::new(Dataver::new_rand(matter.rand()), unit_testing_data).adapt()),
+                        Async(
+                            UnitTestingHandler::new(
+                                Dataver::new_rand(matter.rand()),
+                                unit_testing_data,
+                            )
+                            .adapt(),
+                        ),
                     ),
             ),
         ),
