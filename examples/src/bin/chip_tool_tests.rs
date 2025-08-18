@@ -210,11 +210,11 @@ fn dm_handler<'a>(
                     )
                     .chain(
                         EpClMatcher::new(Some(1), Some(OnOffHandler::CLUSTER.id)),
-                        Async(rs_matter::dm::clusters::on_off::HandlerAdaptor(on_off)),
+                        Async(on_off.adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(1), Some(UnitTestingHandler::CLUSTER.id)),
-                        Async(rs_matter::dm::clusters::unit_testing::HandlerAdaptor(unit_testing)),
+                        Async(unit_testing.adapt()),
                     ),
             ),
         ),
