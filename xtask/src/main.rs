@@ -66,6 +66,19 @@ fn main() -> Result<()> {
     }
 }
 
+fn detect_host_platform() -> Result<String> {
+    use std::env;
+    
+    let os = env::consts::OS;
+    let platform = match os {
+        "linux" => "linux",
+        "macos" => "darwin", 
+        _ => return Err(anyhow!("Unsupported platform for ConnectedHomeIP integration tests: {}", os)),
+    };
+    
+    Ok(platform.to_string())
+}
+
 fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -> Result<()> {
     let project_root = get_project_root()?;
     let connectedhomeip_dir = project_root.join(".build/itest/connectedhomeip");
@@ -77,7 +90,7 @@ fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -> Resu
 
     // Clone or update ConnectedHomeIP repository
     if !connectedhomeip_dir.exists() {
-        println!("Cloning ConnectedHomeIP repository...");
+        println!("Cloning ConnectedHomeIP repository (shallow clone)...");
         // Ensure parent directories exist
         if let Some(parent) = connectedhomeip_dir.parent() {
             std::fs::create_dir_all(parent)
@@ -85,7 +98,7 @@ fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -> Resu
         }
         run_command(
             Command::new("git")
-                .args(&["clone", "--recurse-submodules", 
+                .args(&["clone", "--depth=1", 
                        "https://github.com/project-chip/connectedhomeip.git"])
                 .arg(&connectedhomeip_dir)
         )?;
@@ -109,10 +122,15 @@ fn setup_connectedhomeip(connectedhomeip_ref: &str, force_rebuild: bool) -> Resu
             .current_dir(&connectedhomeip_dir)
     )?;
 
-    // Update submodules
+    // Detect host platform for selective submodule initialization
+    let platform = detect_host_platform()?;
+    println!("Detected platform: {}", platform);
+    
+    // Initialize submodules selectively for host platform only
+    println!("Initializing submodules for platform: {}...", platform);
     run_command(
-        Command::new("git")
-            .args(&["submodule", "update", "--init", "--recursive"])
+        Command::new("python3")
+            .args(&["scripts/checkout_submodules.py", "--shallow", "--platform", &platform])
             .current_dir(&connectedhomeip_dir)
     )?;
 
