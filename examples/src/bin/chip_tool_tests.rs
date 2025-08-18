@@ -65,6 +65,9 @@ static PSM: StaticCell<Psm<4096>> = StaticCell::new();
 static UNIT_TESTING_DATA: StaticCell<RefCell<UnitTestingHandlerData>> = StaticCell::new();
 
 fn main() -> Result<(), Error> {
+    // Enable detailed backtraces for debugging RefCell borrowing issues
+    std::env::set_var("RUST_BACKTRACE", "1");
+    
     // Special logging configuration compatible with ConnectedHomeIP YAML tests
     // Log to stdout with simplified format at debug level as required by chip-tool tests
     env_logger::builder()
@@ -101,15 +104,11 @@ fn main() -> Result<(), Error> {
     // Create the subscriptions
     let subscriptions = SUBSCRIPTIONS.uninit().init_with(Subscriptions::init());
 
-    // Our on-off cluster
-    let on_off = OnOffHandler::new(Dataver::new_rand(matter.rand()));
-
-    // Our unit testing cluster data and handler
+    // Our unit testing cluster data
     let unit_testing_data = UNIT_TESTING_DATA.uninit().init_with(RefCell::init(UnitTestingHandlerData::init()));
-    let unit_testing = UnitTestingHandler::new(Dataver::new_rand(matter.rand()), unit_testing_data);
 
     // Assemble our Data Model handler by composing the predefined Root Endpoint handler with our cluster handlers
-    let dm_handler = dm_handler(matter, &on_off, &unit_testing);
+    let dm_handler = dm_handler(matter, unit_testing_data);
 
     // Create a default responder capable of handling up to 3 subscriptions
     // All other subscription requests will be turned down with "resource exhausted"
@@ -191,8 +190,7 @@ const NODE: Node<'static> = Node {
 /// The handler is the root endpoint 0 handler plus the on-off and unit testing handlers.
 fn dm_handler<'a>(
     matter: &'a Matter<'a>,
-    on_off: &'a OnOffHandler,
-    unit_testing: &'a UnitTestingHandler<'a>,
+    unit_testing_data: &'a RefCell<UnitTestingHandlerData>,
 ) -> impl AsyncMetadata + AsyncHandler + 'a {
     (
         NODE,
@@ -210,11 +208,11 @@ fn dm_handler<'a>(
                     )
                     .chain(
                         EpClMatcher::new(Some(1), Some(OnOffHandler::CLUSTER.id)),
-                        Async(on_off.adapt()),
+                        Async(OnOffHandler::new(Dataver::new_rand(matter.rand())).adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(1), Some(UnitTestingHandler::CLUSTER.id)),
-                        Async(unit_testing.adapt()),
+                        Async(UnitTestingHandler::new(Dataver::new_rand(matter.rand()), unit_testing_data).adapt()),
                     ),
             ),
         ),

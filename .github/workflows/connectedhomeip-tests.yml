@@ -32,7 +32,9 @@ jobs:
             git \
             python3 \
             python3-pip \
-            python3-venv
+            python3-venv \
+            gn \
+            ninja-build
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -46,12 +48,12 @@ jobs:
       - name: Cache ConnectedHomeIP build
         uses: actions/cache@v4
         with:
-          path: connectedhomeip/out
+          path: .build/itest/connectedhomeip/out
           key: >-
             ${{ runner.os }}-connectedhomeip-${{
             inputs.connectedhomeip_ref || 'master' }}-${{
-            hashFiles('connectedhomeip/**/*.py',
-            'connectedhomeip/**/*.sh', 'connectedhomeip/**/BUILD.gn') }}
+            hashFiles('.build/itest/connectedhomeip/**/*.py',
+            '.build/itest/connectedhomeip/**/*.sh', '.build/itest/connectedhomeip/**/BUILD.gn') }}
           restore-keys: |
             ${{ runner.os }}-connectedhomeip-
 
@@ -85,5 +87,5 @@ jobs:
           name: test-results-${{ github.run_id }}
           path: |
             /tmp/rs-matter*/
-            connectedhomeip/out/host/chip-tool.log
+            .build/itest/connectedhomeip/out/host/chip-tool.log
           retention-days: 7
