@@ -9,6 +9,9 @@ Always reference these instructions first and fallback to search or bash command
 Install required system dependencies first:
 - `sudo apt update && sudo apt install -y libdbus-1-dev pkg-config libavahi-client-dev libavahi-common-dev`
 
+**For ConnectedHomeIP integration testing, also install:**
+- `sudo apt install -y gn ninja-build python3 python3-pip python3-venv git`
+
 ### Build Commands
 - **Basic check**: `cargo check` -- takes 48 seconds. NEVER CANCEL. Set timeout to 2+ minutes.
 - **Build with default features**: `cargo build` -- takes 49 seconds. NEVER CANCEL. Set timeout to 2+ minutes.
@@ -17,6 +20,12 @@ Install required system dependencies first:
 - **Build examples**: `cd examples && cargo build --features zeroconf` -- takes 63 seconds. NEVER CANCEL. Set timeout to 2+ minutes.
 - **CI-style build**: `cargo build --no-default-features --features rustcrypto,os,log` -- takes 49 seconds. NEVER CANCEL. Set timeout to 2+ minutes.
 - **Minimal build**: `cargo build --no-default-features --features rustcrypto` -- takes 31 seconds. NEVER CANCEL. Set timeout to 2+ minutes.
+
+### xtask Commands (ConnectedHomeIP Integration Testing)
+- **Setup integration tests**: `cargo xtask itest-setup` -- takes 5-10 minutes on first run. NEVER CANCEL. Set timeout to 15+ minutes.
+- **Build examples for testing**: `cargo xtask build` -- takes 2 minutes. NEVER CANCEL. Set timeout to 3+ minutes.
+- **Run all integration tests**: `cargo xtask itest` -- takes 5-15 minutes. NEVER CANCEL. Set timeout to 20+ minutes.
+- **Run specific test**: `cargo xtask itest TestBasicInformation` -- takes 2-5 minutes. NEVER CANCEL. Set timeout to 10+ minutes.
 
 ### Test Commands
 - **Run tests**: `cargo test -- --test-threads 1` -- takes 2.4 minutes. NEVER CANCEL. Set timeout to 5+ minutes.
@@ -39,6 +48,42 @@ Crypto backends:
 - **openssl**: Uses OpenSSL (requires OpenSSL dev libraries)
 - **mbedtls**: Uses mbedTLS (currently broken according to Cargo.toml comment)
 
+## ConnectedHomeIP Integration Testing
+
+### Overview
+The repository includes comprehensive integration testing against the official ConnectedHomeIP YAML test suite using a custom `cargo xtask` tool. This enables both automated CI testing and local developer workflows for Matter protocol compliance.
+
+### Setup and Workflow
+```bash
+# One-time setup (installs ConnectedHomeIP, builds chip-tool)
+cargo xtask itest-setup
+
+# Iterative development workflow
+cargo xtask itest TestBasicInformation   # Run specific test
+# Fix rs-matter implementation based on results
+cargo xtask itest TestBasicInformation   # Auto-rebuilds and re-runs
+```
+
+### Available Integration Tests
+Currently enabled tests include:
+- `TestAttributesById` - Basic attribute access testing
+- `TestAccessControlCluster` - Access control functionality  
+- `TestBasicInformation` - Device basic information cluster
+
+### Test Environment
+- Uses dedicated `chip_tool_tests` binary (not `onoff_light`)
+- Implements On/Off and Unit Testing clusters
+- Automatically wipes storage between test runs for clean state
+- Outputs YAML-compatible debug logs for ConnectedHomeIP test parsing
+
+### Development Workflow
+1. **Setup**: `cargo xtask itest-setup` (one-time, 5-10 minutes)
+2. **Iterate**: 
+   - `cargo xtask itest TestName` to run specific test
+   - Fix rs-matter based on test failures
+   - Re-run test (automatically rebuilds)
+3. **Debug**: Tests output detailed logs and Matter protocol traces
+
 ## Validation
 
 ### Manual Testing Scenarios
@@ -50,9 +95,15 @@ Always test examples after making changes:
    - Simulates device functionality (lamp toggle every 5 seconds)
    - Creates mDNS services (may show permission warnings in sandboxed environments)
 
-2. **Build validation**: Always run both check and build commands before committing changes.
+2. **ConnectedHomeIP integration**: Run `cargo xtask itest TestBasicInformation` to verify:
+   - chip_tool_tests binary builds successfully
+   - Outputs proper mDNS service published logs
+   - Responds to ConnectedHomeIP YAML test commands
+   - Shows Matter protocol compliance
 
-3. **Test validation**: Run the full test suite when modifying core functionality.
+3. **Build validation**: Always run both check and build commands before committing changes.
+
+4. **Test validation**: Run the full test suite when modifying core functionality.
 
 ### Expected Behavior
 - Examples output pairing codes like "3497-0112-332"
@@ -65,7 +116,9 @@ Always test examples after making changes:
 ### Build Issues
 - **Missing dbus**: Install `libdbus-1-dev pkg-config`
 - **Missing avahi**: Install `libavahi-client-dev libavahi-common-dev`
+- **Missing ConnectedHomeIP deps**: Install `gn ninja-build python3 python3-pip python3-venv git`
 - **Clippy errors with -Dwarnings**: Known issue with lifetime warnings. Use clippy without `-Dwarnings`.
+- **xtask itest-setup fails**: Ensure all system dependencies installed, may need to run with `--force-rebuild`
 
 ### Running Examples
 Built examples are located in `target/debug/`:
@@ -74,18 +127,23 @@ Built examples are located in `target/debug/`:
 - `bridge` - Matter bridge device
 - `media_player` - Media player device
 - `onoff_light_bt` - Bluetooth variant (requires `zbus` feature)
+- `chip_tool_tests` - Dedicated binary for ConnectedHomeIP YAML integration tests
 
 ### Project Structure
 - `rs-matter/` - Core Matter protocol implementation
 - `rs-matter-macros/` - Procedural macros for IDL code generation
 - `examples/` - Example Matter devices
+- `xtask/` - Rust-based task runner for ConnectedHomeIP integration testing
 - `.github/workflows/ci.yml` - CI configuration with matrix builds
+- `.github/workflows/connectedhomeip-tests.yml` - ConnectedHomeIP integration testing workflow
 
 ### Timeout Guidelines
 **CRITICAL**: Build and test commands can take significant time. Always use adequate timeouts:
 - Basic builds: 2+ minutes
 - Feature builds: 2-4+ minutes  
 - Tests: 5+ minutes
+- **ConnectedHomeIP setup: 15+ minutes** (first time only)
+- **Integration tests: 10-20+ minutes** (depending on test scope)
 - NEVER CANCEL builds or tests early - they will complete successfully
 
 ### Platform Notes
