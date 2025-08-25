@@ -40,12 +40,11 @@ const BASIC_INFO: BasicInfoConfig<'static> = BasicInfoConfig {
     hw_ver_str: "12",
     sw_ver: 13,
     sw_ver_str: "13",
-    serial_no: "aabbccdd",
+    serial_no: Some("aabbccdd"),
     device_name: "Test Device",
     product_name: "TestProd",
     vendor_name: "TestVendor",
-    sai: None,
-    sii: None,
+    ..BasicInfoConfig::new()
 };
 
 #[derive(Debug, Clone)]

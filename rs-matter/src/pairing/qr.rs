@@ -270,17 +270,16 @@ where
     }
 
     fn emit_optional_tlv_data(&self) -> impl Iterator<Item = Result<u8, Error>> + '_ {
-        if self.dev_det.serial_no.is_empty() && (self.optional_data)().next().is_none() {
+        if self.dev_det.serial_no.is_none() && (self.optional_data)().next().is_none() {
             return EitherIter::First(core::iter::empty());
         }
 
-        let serial_no = if self.dev_det.serial_no.is_empty() {
-            EitherIter::First(core::iter::empty())
-        } else {
+        let serial_no = if let Some(serial_no) = self.dev_det.serial_no {
             EitherIter::Second(
-                TLV::utf8(TLVTag::Context(SERIAL_NUMBER_TAG), self.dev_det.serial_no)
-                    .into_tlv_iter(),
+                TLV::utf8(TLVTag::Context(SERIAL_NUMBER_TAG), serial_no).into_tlv_iter(),
             )
+        } else {
+            EitherIter::First(core::iter::empty())
         };
 
         EitherIter::Second(
@@ -575,7 +574,7 @@ mod tests {
         let dev_det = BasicInfoConfig {
             vid: 65521,
             pid: 32769,
-            serial_no: "1234567890",
+            serial_no: Some("1234567890"),
             ..Default::default()
         };
 
@@ -604,7 +603,7 @@ mod tests {
         let dev_det = BasicInfoConfig {
             vid: 65521,
             pid: 32769,
-            serial_no: "1234567890",
+            serial_no: Some("1234567890"),
             ..Default::default()
         };
 
