@@ -559,7 +559,31 @@ impl Drop for ReservedSession<'_> {
     }
 }
 
-const MAX_SESSIONS: usize = 16;
+/// Max number of supported fabrics
+#[cfg(feature = "max-sessions-64")]
+pub const MAX_SESSIONS: usize = 64;
+#[cfg(all(feature = "max-sessions-32", not(feature = "max-sessions-64")))]
+pub const MAX_SESSIONS: usize = 32;
+#[cfg(all(feature = "max-sessions-16", not(any(feature = "max-sessions-64", feature = "max-sessions-32"))))]
+pub const MAX_SESSIONS: usize = 16;
+#[cfg(all(feature = "max-sessions-8", not(any(feature = "max-sessions-64", feature = "max-sessions-32", feature = "max-sessions-8"))))]
+pub const MAX_SESSIONS: usize = 8;
+#[cfg(all(feature = "max-sessions-4", not(any(feature = "max-sessions-64", feature = "max-sessions-32", feature = "max-sessions-8", feature = "max-sessions-4"))))]
+pub const MAX_SESSIONS: usize = 4;
+#[cfg(not(any(feature = "max-sessions-64", feature = "max-sessions-32", feature = "max-sessions-16", feature = "max-sessions-8", feature = "max-sessions-4")))]
+pub const MAX_SESSIONS: usize = 16;
+
+#[cfg(feature = "max-exchanges-per-session-16")]
+const MAX_EXCHANGES: usize = 16;
+#[cfg(all(feature = "max-exchanges-per-session-8", not(feature = "max-exchanges-per-session-16")))]
+const MAX_EXCHANGES: usize = 8;
+#[cfg(all(feature = "max-exchanges-per-session-5", not(any(feature = "max-exchanges-per-session-16", feature = "max-exchanges-per-session-8"))))]
+const MAX_EXCHANGES: usize = 5;
+#[cfg(all(feature = "max-exchanges-per-session-4", not(any(feature = "max-exchanges-per-session-16", feature = "max-exchanges-per-session-8", feature = "max-exchanges-per-session-5"))))]
+const MAX_EXCHANGES: usize = 4;
+#[cfg(all(feature = "max-exchanges-per-session-3", not(any(feature = "max-exchanges-per-session-16", feature = "max-exchanges-per-session-8", feature = "max-exchanges-per-session-5", feature = "max-exchanges-per-session-4"))))]
+const MAX_EXCHANGES: usize = 3;
+#[cfg(not(any(feature = "max-exchanges-per-session-16", feature = "max-exchanges-per-session-8", feature = "max-exchanges-per-session-5", feature = "max-exchanges-per-session-4", feature = "max-exchanges-per-session-3")))]
 const MAX_EXCHANGES: usize = 5;
 
 const MATTER_MSG_CTR_RANGE: u32 = 0x0fffffff;

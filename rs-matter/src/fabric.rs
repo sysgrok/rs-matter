@@ -67,7 +67,7 @@ pub struct Fabric {
     /// Fabric label; unique accross all fabrics on the device
     label: String<32>,
     /// Access Control List
-    acl: Vec<AclEntry, { acl::ENTRIES_PER_FABRIC }>,
+    acl: Vec<AclEntry, { acl::MAX_ACL_ENTRIES_PER_FABRIC }>,
 }
 
 impl Fabric {
@@ -395,12 +395,22 @@ impl Fabric {
 }
 
 /// Max number of supported fabrics
-// TODO: Make this configurable via a cargo feature
-pub const MAX_SUPPORTED_FABRICS: usize = 3;
+#[cfg(feature = "max-fabrics-8")]
+pub const MAX_FABRICS: usize = 8;
+#[cfg(all(feature = "max-fabrics-5", not(feature = "max-fabrics-8")))]
+pub const MAX_FABRICS: usize = 5;
+#[cfg(all(feature = "max-fabrics-4", not(any(feature = "max-fabrics-8", feature = "max-fabrics-5"))))]
+pub const MAX_FABRICS: usize = 4;
+#[cfg(all(feature = "max-fabrics-3", not(any(feature = "max-fabrics-8", feature = "max-fabrics-5", feature = "max-fabrics-4"))))]
+pub const MAX_FABRICS: usize = 3;
+#[cfg(all(feature = "max-fabrics-2", not(any(feature = "max-fabrics-8", feature = "max-fabrics-5", feature = "max-fabrics-4", feature = "max-fabrics-3"))))]
+pub const MAX_FABRICS: usize = 2;
+#[cfg(not(any(feature = "max-fabrics-8", feature = "max-fabrics-5", feature = "max-fabrics-4", feature = "max-fabrics-3", feature = "max-fabrics-2")))]
+pub const MAX_FABRICS: usize = 3;
 
 /// Fabric manager type
 pub struct FabricMgr {
-    fabrics: Vec<Fabric, MAX_SUPPORTED_FABRICS>,
+    fabrics: Vec<Fabric, MAX_FABRICS>,
     changed: bool,
 }
 

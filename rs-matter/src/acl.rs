@@ -38,16 +38,50 @@ use crate::utils::init::{init, Init, IntoFallibleInit};
 use crate::utils::storage::Vec;
 
 /// Max subjects per ACL entry
-// TODO: Make this configurable via a cargo feature
-pub const SUBJECTS_PER_ENTRY: usize = 4;
+#[cfg(feature = "max-subjects-per-acl-16")]
+pub const MAX_SUBJECTS_PER_ACL_ENTRY: usize = 16;
+#[cfg(all(feature = "max-subjects-per-acl-8", not(feature = "max-subjects-per-acl-16")))]
+pub const MAX_SUBJECTS_PER_ACL_ENTRY: usize = 8;
+#[cfg(all(feature = "max-subjects-per-acl-5", not(any(feature = "max-subjects-per-acl-16", feature = "max-subjects-per-acl-8"))))]
+pub const MAX_SUBJECTS_PER_ACL_ENTRY: usize = 5;
+#[cfg(all(feature = "max-subjects-per-acl-4", not(any(feature = "max-subjects-per-acl-16", feature = "max-subjects-per-acl-8", feature = "max-subjects-per-acl-5"))))]
+pub const MAX_SUBJECTS_PER_ACL_ENTRY: usize = 4;
+#[cfg(all(feature = "max-subjects-per-acl-3", not(any(feature = "max-subjects-per-acl-16", feature = "max-subjects-per-acl-8", feature = "max-subjects-per-acl-5", feature = "max-subjects-per-acl-4"))))]
+pub const MAX_SUBJECTS_PER_ACL_ENTRY: usize = 3;
+#[cfg(all(feature = "max-subjects-per-acl-2", not(any(feature = "max-subjects-per-acl-16", feature = "max-subjects-per-acl-8", feature = "max-subjects-per-acl-5", feature = "max-subjects-per-acl-4", feature = "max-subjects-per-acl-3"))))]
+pub const MAX_SUBJECTS_PER_ACL_ENTRY: usize = 2;
+#[cfg(not(any(feature = "max-subjects-per-acl-16", feature = "max-subjects-per-acl-8", feature = "max-subjects-per-acl-5", feature = "max-subjects-per-acl-4", feature = "max-subjects-per-acl-3", feature = "max-subjects-per-acl-2")))]
+pub const MAX_SUBJECTS_PER_ACL_ENTRY: usize = 4;
 
 /// Max targets per ACL entry
-// TODO: Make this configurable via a cargo feature
-pub const TARGETS_PER_ENTRY: usize = 3;
+#[cfg(feature = "max-targets-per-acl-16")]
+pub const MAX_TARGETS_PER_ACL_ENTRY: usize = 16;
+#[cfg(all(feature = "max-targets-per-acl-8", not(feature = "max-targets-per-acl-16")))]
+pub const MAX_TARGETS_PER_ACL_ENTRY: usize = 8;
+#[cfg(all(feature = "max-targets-per-acl-5", not(any(feature = "max-targets-per-acl-16", feature = "max-targets-per-acl-8"))))]
+pub const MAX_TARGETS_PER_ACL_ENTRY: usize = 5;
+#[cfg(all(feature = "max-targets-per-acl-4", not(any(feature = "max-targets-per-acl-16", feature = "max-targets-per-acl-8", feature = "max-targets-per-acl-5"))))]
+pub const MAX_TARGETS_PER_ACL_ENTRY: usize = 4;
+#[cfg(all(feature = "max-targets-per-acl-3", not(any(feature = "max-targets-per-acl-16", feature = "max-targets-per-acl-8", feature = "max-targets-per-acl-5", feature = "max-targets-per-acl-4"))))]
+pub const MAX_TARGETS_PER_ACL_ENTRY: usize = 3;
+#[cfg(all(feature = "max-targets-per-acl-2", not(any(feature = "max-targets-per-acl-16", feature = "max-targets-per-acl-8", feature = "max-targets-per-acl-5", feature = "max-targets-per-acl-4", feature = "max-targets-per-acl-3"))))]
+pub const MAX_TARGETS_PER_ACL_ENTRY: usize = 2;
+#[cfg(not(any(feature = "max-targets-per-acl-16", feature = "max-targets-per-acl-8", feature = "max-targets-per-acl-5", feature = "max-targets-per-acl-4", feature = "max-targets-per-acl-3", feature = "max-targets-per-acl-2")))]
+pub const MAX_TARGETS_PER_ACL_ENTRY: usize = 3;
 
 /// Max ACL entries per fabric
-// TODO: Make this configurable via a cargo feature
-pub const ENTRIES_PER_FABRIC: usize = 4;
+#[cfg(feature = "max-acls-per-fabric-16")]
+pub const MAX_ACL_ENTRIES_PER_FABRIC: usize = 16;
+#[cfg(all(feature = "max-acls-per-fabric-8", not(feature = "max-acls-per-fabric-16")))]
+pub const MAX_ACL_ENTRIES_PER_FABRIC: usize = 8;
+#[cfg(all(feature = "max-acls-per-fabric-4", not(any(feature = "max-acls-per-fabric-16", feature = "max-acls-per-fabric-8"))))]
+pub const MAX_ACL_ENTRIES_PER_FABRIC: usize = 4;
+#[cfg(all(feature = "max-acls-per-fabric-3", not(any(feature = "max-acls-per-fabric-16", feature = "max-acls-per-fabric-8", feature = "max-acls-per-fabric-4"))))]
+pub const MAX_ACL_ENTRIES_PER_FABRIC: usize = 3;
+#[cfg(all(feature = "max-acls-per-fabric-2", not(any(feature = "max-acls-per-fabric-16", feature = "max-acls-per-fabric-8", feature = "max-acls-per-fabric-4", feature = "max-acls-per-fabric-3"))))]
+pub const MAX_ACL_ENTRIES_PER_FABRIC: usize = 2;
+#[cfg(not(any(feature = "max-acls-per-fabric-16", feature = "max-acls-per-fabric-8", feature = "max-acls-per-fabric-4", feature = "max-acls-per-fabric-3", feature = "max-acls-per-fabric-2")))]
+pub const MAX_ACL_ENTRIES_PER_FABRIC: usize = 4;
 
 /// An enum modeling the different authentication modes
 // TODO: Check if this and the SessionMode can be combined into some generic data structure
@@ -387,9 +421,9 @@ pub struct AclEntry {
     /// The auth mode of the entry
     auth_mode: AuthMode,
     /// The subjects of the entry
-    subjects: Nullable<Vec<u64, SUBJECTS_PER_ENTRY>>,
+    subjects: Nullable<Vec<u64, MAX_SUBJECTS_PER_ACL_ENTRY>>,
     /// The targets of the entry
-    targets: Nullable<Vec<Target, TARGETS_PER_ENTRY>>,
+    targets: Nullable<Vec<Target, MAX_TARGETS_PER_ACL_ENTRY>>,
     // TODO: Instead of the direct value, we should consider GlobalElements::FabricIndex
     // Note that this field will always be `Some(NN)` when the entry is persisted in storage,
     // however, it will be `None` when the entry is coming from the other peer
