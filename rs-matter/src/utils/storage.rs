@@ -25,4 +25,5 @@ pub mod pooled;
 mod parsebuf;
 mod ringbuf;
 mod vec;
+mod slice_vec;
 mod writebuf;
