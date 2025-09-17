@@ -862,12 +862,24 @@ where
                                         // 
                                         // Reason is yet unknown, but sending system array attributes as a whole is a valid workaround,
                                         // because we do know that every system array attribute fits in single Matter message
-                                        && !a.is_system()
+                                        //&& !a.is_system()
                                     })
                                     .unwrap_or(false)
                         });
 
                         if let Some(array_attr) = array_attr {
+                            // NOTE: If we send the current message _before_ we start streaming the array items,
+                            // we are at least getting an "InvalidAction" status response from the controller
+                            //
+                            // However - and with the code below staying commented out, what we get in terms of a status response
+                            // is "OK", but then in the logs we see a **re-sending** of the **same** status response except we
+                            // do not longer decode it because at that time the exchange is already closed.
+
+                            // debug!("<<< No TX space, chunking >>>");
+                            // if !self.send(true, false, wb).await? {
+                            //     return Ok(false);
+                            // }
+
                             if self.send_array_items(array_attr, wb).await? {
                                 break;
                             } else {
