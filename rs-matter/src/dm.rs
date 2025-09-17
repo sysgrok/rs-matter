@@ -173,7 +173,10 @@ where
             HandlerInvoker::new(exchange, &self.handler, &self.buffers),
         );
 
-        resp.respond(&mut wb, true).await?;
+        // XXX Temporarily remove suppression of last status response so that we
+        // can see the last status response in the logs too
+        //resp.respond(&mut wb, true).await?;
+        resp.respond(&mut wb, false).await?;
 
         Ok(())
     }
@@ -868,12 +871,9 @@ where
                         });
 
                         if let Some(array_attr) = array_attr {
-                            // NOTE: If we send the current message _before_ we start streaming the array items,
-                            // we are at least getting an "InvalidAction" status response from the controller
-                            //
-                            // However - and with the code below staying commented out, what we get in terms of a status response
-                            // is "OK", but then in the logs we see a **re-sending** of the **same** status response except we
-                            // do not longer decode it because at that time the exchange is already closed.
+                            // XXX The code below sends the current Matter IM message early,
+                            // before the array "rep[lace" op and before starting to send the array items one by one
+                            // however the result is still the same - InvalidAction
 
                             // debug!("<<< No TX space, chunking >>>");
                             // if !self.send(true, false, wb).await? {
