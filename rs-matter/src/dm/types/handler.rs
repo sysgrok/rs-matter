@@ -707,6 +707,8 @@ macro_rules! handler_chain_type {
 }
 
 mod asynch {
+    use core::pin::pin;
+
     use embassy_futures::select::select;
 
     use crate::dm::{InvokeReply, Matcher, ReadReply};
@@ -1014,7 +1016,10 @@ mod asynch {
         }
 
         async fn run(&self) -> Result<(), Error> {
-            select(self.handler.run(), self.next.run()).coalesce().await
+            let mut handler = pin!(self.handler.run());
+            let mut next = pin!(self.next.run());
+
+            select(&mut handler, &mut next).coalesce().await
         }
     }
 
