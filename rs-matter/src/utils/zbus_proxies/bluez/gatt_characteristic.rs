@@ -17,12 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.bluez.GattCharacteristic1`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
-use zbus::{
-    proxy,
-    zvariant::{OwnedFd, OwnedObjectPath, Value},
-};
+use zbus::proxy;
+use zbus::zvariant::{OwnedFd, OwnedObjectPath, Value};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.GattCharacteristic1", assume_defaults = true)]
 pub trait GattCharacteristic {

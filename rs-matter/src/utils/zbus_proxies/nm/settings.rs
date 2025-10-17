@@ -17,10 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.freedesktop.NetworkManager.Settings`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
 use zbus::proxy;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.NetworkManager.Settings",

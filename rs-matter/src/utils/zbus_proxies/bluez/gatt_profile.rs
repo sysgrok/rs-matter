@@ -17,7 +17,12 @@
 
 //! # D-Bus interface proxy for: `org.bluez.GattProfile1`
 
+use alloc::vec;
+
 use zbus::proxy;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.GattProfile1", assume_defaults = true)]
 pub trait GattProfile {

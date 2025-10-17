@@ -21,6 +21,9 @@ use core::cell::RefCell;
 
 use std::collections::HashMap;
 
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
@@ -42,6 +45,9 @@ use crate::utils::sync::{blocking, IfMutex};
 use crate::utils::zbus_proxies::wpa_supp::bss::BSSProxy;
 use crate::utils::zbus_proxies::wpa_supp::interface::InterfaceProxy;
 use crate::utils::zbus_proxies::wpa_supp::wpa_supplicant::WPASupplicantProxy;
+
+extern crate alloc;
+extern crate std;
 
 #[cfg(unix)]
 pub mod unix;

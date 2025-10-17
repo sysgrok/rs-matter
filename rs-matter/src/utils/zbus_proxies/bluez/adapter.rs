@@ -17,10 +17,13 @@
 
 //! # D-Bus interface proxy for: `org.bluez.Adapter1`
 
-use zbus::{
-    proxy,
-    zvariant::{ObjectPath, Value},
-};
+use alloc::vec;
+
+use zbus::proxy;
+use zbus::zvariant::{ObjectPath, Value};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.Adapter1", default_service = "org.bluez")]
 pub trait Adapter {

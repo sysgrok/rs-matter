@@ -19,6 +19,9 @@
 
 use core::cell::RefCell;
 
+use alloc::format;
+use alloc::string::String;
+
 use std::process::Command;
 
 use embassy_futures::select::{select, Either};
@@ -31,6 +34,9 @@ use crate::error::{Error, ErrorCode};
 use crate::transport::network::wifi::wpa_supp::IpStackCtl;
 use crate::utils::ipv6::create_link_local_ipv6;
 use crate::utils::sync::blocking;
+
+extern crate alloc;
+extern crate std;
 
 /// An `IpStackCtl` implementation for the linux `dhclient` command-line utility.
 ///

@@ -17,7 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.freedesktop.Avahi.AddressResolver`
 
+use core::convert::TryFrom;
+
+use alloc::boxed::Box;
+use alloc::vec;
+
 use zbus::proxy;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.Avahi.AddressResolver",

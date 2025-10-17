@@ -17,7 +17,13 @@
 
 //! # D-Bus interface proxy for: `org.freedesktop.NetworkManager.Device.Hsr`
 
-use zbus::{proxy, zvariant::OwnedObjectPath};
+use alloc::vec;
+
+use zbus::proxy;
+use zbus::zvariant::OwnedObjectPath;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.NetworkManager.Device.Hsr",

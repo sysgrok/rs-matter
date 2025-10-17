@@ -17,12 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.bluez.Media1`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
-use zbus::{
-    proxy,
-    zvariant::{ObjectPath, Value},
-};
+use zbus::proxy;
+use zbus::zvariant::{ObjectPath, Value};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.Media1", default_service = "org.bluez")]
 pub trait Media {

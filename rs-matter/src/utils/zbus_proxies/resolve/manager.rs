@@ -19,12 +19,15 @@
 
 #![allow(clippy::type_complexity)]
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
-use zbus::{
-    proxy,
-    zvariant::{ObjectPath, OwnedObjectPath},
-};
+use zbus::proxy;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.resolve1.Manager",

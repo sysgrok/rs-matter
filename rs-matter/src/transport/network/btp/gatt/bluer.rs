@@ -21,6 +21,9 @@ use core::iter::once;
 use core::pin::pin;
 use core::ptr::addr_of_mut;
 
+use alloc::borrow::ToOwned;
+use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::sync::Arc;
 
 use bluer::adv::Advertisement;
@@ -52,6 +55,9 @@ use super::{AdvData, GattPeripheral, GattPeripheralEvent};
 use super::{C1_CHARACTERISTIC_UUID, C2_CHARACTERISTIC_UUID, MATTER_BLE_SERVICE_UUID};
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
+
+extern crate alloc;
+extern crate std;
 
 /// The internal state of the peripheral.
 /// Arc-ed so as to be thread-safe and to have `'static` interior, as demanded by the BlueR bindings.
@@ -172,10 +178,10 @@ impl BluerGattPeripheral {
 
         // Service and characteristics as per the Matter Core spec
         let app = Application {
-            services: vec![Service {
+            services: alloc::vec![Service {
                 uuid: Uuid::from_u128(MATTER_BLE_SERVICE_UUID),
                 primary: true,
-                characteristics: vec![
+                characteristics: alloc::vec![
                     Characteristic {
                         uuid: Uuid::from_u128(C1_CHARACTERISTIC_UUID),
                         write: Some(CharacteristicWrite {

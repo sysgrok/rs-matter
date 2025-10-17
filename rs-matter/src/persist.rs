@@ -38,6 +38,8 @@ pub mod fileio {
     use crate::utils::storage::WriteBuf;
     use crate::Matter;
 
+    extern crate std;
+
     /// A constant representing the absence of wireless networks.
     pub const NO_NETWORKS: Option<&'static WirelessNetworks<0, NoopRawMutex, Wifi>> = None;
 

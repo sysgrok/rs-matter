@@ -228,6 +228,8 @@ pub mod raw {
     mod std {
         use embassy_sync::blocking_mutex::raw::RawMutex;
 
+        extern crate std;
+
         /// An `embassy-sync` `RawMutex` implementation using `std::sync::Mutex`.
         // TODO: Upstream into `embassy-sync` itself.
         #[derive(Default)]

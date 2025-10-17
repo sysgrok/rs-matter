@@ -17,8 +17,13 @@
 
 //! # D-Bus interface proxy for: `org.freedesktop.NetworkManager.Connection.Active`
 
+use alloc::vec;
+
 use zbus::proxy;
 use zbus::zvariant::OwnedObjectPath;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.NetworkManager.Connection.Active",

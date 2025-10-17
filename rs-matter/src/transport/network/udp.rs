@@ -29,6 +29,8 @@ use crate::transport::network::Address;
 
 use super::{NetworkReceive, NetworkSend};
 
+extern crate std;
+
 impl NetworkSend for &Async<UdpSocket> {
     async fn send_to(&mut self, data: &[u8], addr: Address) -> Result<(), Error> {
         Async::<UdpSocket>::send_to(self, data, addr.udp().ok_or(ErrorCode::NoNetworkInterface)?)

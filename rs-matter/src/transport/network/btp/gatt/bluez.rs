@@ -21,7 +21,11 @@ use core::iter::once;
 use core::marker::PhantomData;
 use core::pin::pin;
 
+use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd, RawFd};
@@ -51,6 +55,9 @@ use super::{
     AdvData, GattPeripheral, GattPeripheralEvent, C1_CHARACTERISTIC_UUID, C2_CHARACTERISTIC_UUID,
     MATTER_BLE_SERVICE_UUID,
 };
+
+extern crate alloc;
+extern crate std;
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
 

@@ -15,7 +15,15 @@
  *    limitations under the License.
  */
 
-use core::{array::TryFromSliceError, fmt, str::Utf8Error};
+use core::array::TryFromSliceError;
+use core::fmt;
+use core::str::Utf8Error;
+
+#[cfg(feature = "std")]
+extern crate std;
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 // TODO: The error code enum is in a need of an overhaul
 //
@@ -115,7 +123,7 @@ pub struct Error {
     #[cfg(all(feature = "std", feature = "backtrace"))]
     backtrace: std::backtrace::Backtrace,
     #[cfg(all(feature = "std", feature = "backtrace"))]
-    inner: Option<Box<dyn std::error::Error + Send>>,
+    inner: Option<alloc::boxed::Box<dyn std::error::Error + Send>>,
 }
 
 impl Error {
@@ -132,7 +140,7 @@ impl Error {
     #[cfg(all(feature = "std", feature = "backtrace"))]
     pub fn new_with_details(
         code: ErrorCode,
-        detailed_err: Box<dyn std::error::Error + Send>,
+        detailed_err: alloc::boxed::Box<dyn std::error::Error + Send>,
     ) -> Self {
         Self {
             code,
@@ -161,7 +169,7 @@ impl Error {
 #[cfg(all(feature = "std", feature = "backtrace"))]
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        Self::new_with_details(ErrorCode::StdIoError, Box::new(e))
+        Self::new_with_details(ErrorCode::StdIoError, alloc::boxed::Box::new(e))
     }
 }
 
@@ -262,7 +270,7 @@ impl From<bluer::Error> for Error {
 #[cfg(all(feature = "os", target_os = "linux", feature = "backtrace"))]
 impl From<bluer::Error> for Error {
     fn from(e: bluer::Error) -> Self {
-        Self::new_with_details(ErrorCode::BtpError, Box::new(e))
+        Self::new_with_details(ErrorCode::BtpError, alloc::boxed::Box::new(e))
     }
 }
 
@@ -307,10 +315,12 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         #[cfg(all(feature = "std", feature = "backtrace"))]
         {
+            use crate::alloc::string::ToString;
+
             let err_msg = self
                 .inner
                 .as_ref()
-                .map_or(String::new(), |err| err.to_string());
+                .map_or(alloc::string::String::new(), |err| err.to_string());
 
             if err_msg.is_empty() {
                 write!(f, "{:?}", self.code())

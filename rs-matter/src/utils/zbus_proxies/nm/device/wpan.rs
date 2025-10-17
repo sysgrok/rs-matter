@@ -17,7 +17,12 @@
 
 //! # D-Bus interface proxy for: `org.freedesktop.NetworkManager.Device.Wpan`
 
+use alloc::vec;
+
 use zbus::proxy;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.NetworkManager.Device.Wpan",

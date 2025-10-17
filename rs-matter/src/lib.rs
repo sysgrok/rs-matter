@@ -69,7 +69,7 @@
 //! ```
 //!
 //! Start off exploring by going to the [Matter] object.
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 #![allow(async_fn_in_trait)]
 #![allow(unknown_lints)]
 #![allow(clippy::uninlined_format_args)]

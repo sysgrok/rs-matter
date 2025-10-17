@@ -19,10 +19,15 @@
 
 #![allow(clippy::type_complexity)]
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
 use zbus::proxy;
 use zbus::zvariant::OwnedValue;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.NetworkManager.IP6Config",

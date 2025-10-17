@@ -17,12 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.bluez.LEAdvertisingManager1`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
-use zbus::{
-    proxy,
-    zvariant::{ObjectPath, Value},
-};
+use zbus::proxy;
+use zbus::zvariant::{ObjectPath, Value};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.bluez.LEAdvertisingManager1",

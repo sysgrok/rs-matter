@@ -17,10 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.freedesktop.NetworkManager.IP4Config`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
 use zbus::proxy;
 use zbus::zvariant::OwnedValue;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "org.freedesktop.NetworkManager.IP4Config",

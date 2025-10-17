@@ -19,10 +19,15 @@
 
 #![allow(clippy::type_complexity)]
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
 use zbus::proxy;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+
+extern crate alloc;
+extern crate std;
 
 pub mod adsl;
 pub mod bluetooth;

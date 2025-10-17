@@ -32,6 +32,8 @@ pub fn dummy_epoch() -> Duration {
 
 #[cfg(feature = "std")]
 pub fn sys_epoch() -> Duration {
+    extern crate std;
+
     unwrap!(
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH),
         "System time is before UNIX_EPOCH"

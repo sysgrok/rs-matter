@@ -17,7 +17,12 @@
 
 //! # D-Bus interface proxy for: `org.bluez.AdminPolicySet1`
 
+use alloc::vec;
+
 use zbus::proxy;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.AdminPolicySet1", assume_defaults = true)]
 pub trait AdminPolicySet {

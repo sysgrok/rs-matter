@@ -22,6 +22,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 
+use alloc::format;
+use alloc::vec::Vec;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::Connection;
 
@@ -30,6 +32,9 @@ use crate::transport::network::mdns::Service;
 use crate::utils::zbus_proxies::avahi::entry_group::EntryGroupProxy;
 use crate::utils::zbus_proxies::avahi::server2::Server2Proxy;
 use crate::{Matter, MatterMdnsService};
+
+extern crate alloc;
+extern crate std;
 
 /// An mDNS responder for Matter utilizing the Avahi daemon over DBus.
 pub struct AvahiMdnsResponder<'a> {

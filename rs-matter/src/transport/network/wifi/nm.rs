@@ -23,6 +23,9 @@
 
 use core::cell::RefCell;
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use std::collections::HashMap;
 
 use embassy_futures::select::{select, select3, Either, Either3};
@@ -51,6 +54,9 @@ use crate::utils::zbus_proxies::nm::device::wireless::WirelessProxy;
 use crate::utils::zbus_proxies::nm::device::DeviceProxy;
 use crate::utils::zbus_proxies::nm::network_manager::NetworkManagerProxy;
 use crate::utils::zbus_proxies::nm::{NM80211ApSecurityFlags, NM80211Mode, NMDeviceState};
+
+extern crate alloc;
+extern crate std;
 
 /// A `NetCtl`, `WirelessDiag`, `WifiDiag` and `NetChangeNotif` implementation based on the `NetworkManager` service.
 ///

@@ -19,6 +19,8 @@
 //!
 //! Requires the systemd-resolved daemon to be installed, configured with mDNS enabled and running.
 
+use alloc::format;
+
 use std::collections::{HashMap, HashSet};
 
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
@@ -28,6 +30,9 @@ use crate::error::Error;
 use crate::transport::network::mdns::Service;
 use crate::utils::zbus_proxies::resolve::manager::ManagerProxy;
 use crate::{Matter, MatterMdnsService};
+
+extern crate alloc;
+extern crate std;
 
 /// An mDNS responder for Matter utilizing the systemd-resolved daemon over DBus.
 ///

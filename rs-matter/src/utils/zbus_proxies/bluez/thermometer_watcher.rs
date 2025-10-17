@@ -17,9 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.bluez.ThermometerWatcher1`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
-use zbus::{proxy, zvariant::Value};
+use zbus::proxy;
+use zbus::zvariant::Value;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.ThermometerWatcher1", assume_defaults = true)]
 pub trait ThermometerWatcher {

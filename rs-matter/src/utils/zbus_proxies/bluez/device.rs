@@ -17,12 +17,15 @@
 
 //! # D-Bus interface proxy for: `org.bluez.Device1`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
-use zbus::{
-    proxy,
-    zvariant::{OwnedObjectPath, OwnedValue},
-};
+use zbus::proxy;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.Device1", assume_defaults = true)]
 pub trait Device {

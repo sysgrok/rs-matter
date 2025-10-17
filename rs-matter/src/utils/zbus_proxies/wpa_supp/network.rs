@@ -17,10 +17,15 @@
 
 //! # D-Bus interface proxy for: `fi.w1.wpa_supplicant1.Interface.Network`
 
+use alloc::vec;
+
 use std::collections::HashMap;
 
 use zbus::proxy;
 use zbus::zvariant::{OwnedValue, Value};
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(
     interface = "fi.w1.wpa_supplicant1.Network",

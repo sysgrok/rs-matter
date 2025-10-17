@@ -17,7 +17,13 @@
 
 //! # D-Bus interface proxy for: `org.bluez.MediaControl1`
 
-use zbus::{proxy, zvariant::OwnedObjectPath};
+use alloc::vec;
+
+use zbus::proxy;
+use zbus::zvariant::OwnedObjectPath;
+
+extern crate alloc;
+extern crate std;
 
 #[proxy(interface = "org.bluez.MediaControl1", assume_defaults = true)]
 pub trait MediaControl {
