@@ -30,17 +30,22 @@ use log::{debug, info, warn};
 
 /// Default tests
 const DEFAULT_TESTS: &[&str] = &[
+    "Test_AddNewFabricFromExistingFabric",
+    "TestAccessControlCluster",
+    //"TestAccessControlConstraints", TODO: Check why it fails
+    "TestArmFailSafe",
     "TestAttributesById",
-    "TestCommandsById",
+    "TestBasicInformation",
     "TestCluster",
     "TestClusterComplexTypes",
-    "TestBasicInformation",
-    "TestAccessControlCluster",
-    "TestArmFailSafe",
-    "TestSelfFabricRemoval",
     "TestClusterMultiFabric",
+    "TestCommandsById",
     "TestCommissionerNodeId",
     "TestCommissioningWindow",
+    "TestConfigVariables",
+    //"TestConstraints", TODO: Check why it fails
+    "TestDelayCommands",
+    "TestSelfFabricRemoval",
 ];
 
 /// The default Git reference to use for the Chip repository
