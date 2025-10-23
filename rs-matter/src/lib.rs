@@ -610,6 +610,13 @@ impl<'a> Matter<'a> {
         self.persist_notification.notify();
     }
 
+    /// Reset fabrics by removing all of them
+    ///
+    /// NOTE: This method should only be called when the transport layer is not running.
+    pub fn reset_fabrics(&self) {
+        self.fabric_mgr.borrow_mut().reset();
+    }
+
     /// Load fabrics from the given data
     ///
     /// Arguments:
@@ -633,6 +640,13 @@ impl<'a> Matter<'a> {
     /// Return true if the fabrics have changed since the last call to `store_fabrics`
     pub fn fabrics_changed(&self) -> bool {
         self.fabric_mgr.borrow().is_changed()
+    }
+
+    /// Reset basic info settings to defaults
+    ///
+    /// NOTE: This method should only be called when the transport layer is not running.
+    pub fn reset_basic_info(&self) {
+        self.basic_info_settings.borrow_mut().reset();
     }
 
     /// Load basic info settings from the given data
