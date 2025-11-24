@@ -53,7 +53,7 @@ use rs_matter::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 use rs_matter::dm::devices::DEV_TYPE_CASTING_VIDEO_PLAYER;
 use rs_matter::dm::endpoints;
 use rs_matter::dm::networks::unix::UnixNetifs;
-use rs_matter::dm::subscriptions::DefaultSubscriptions;
+use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::{
     ArrayAttributeRead, Async, AsyncHandler, AsyncMetadata, Cluster, DataModel, Dataver,
     EmptyHandler, Endpoint, EpClMatcher, InvokeContext, Node, ReadContext,
@@ -97,7 +97,7 @@ fn main() -> Result<(), Error> {
     let buffers = PooledBuffers::<10, NoopRawMutex, _>::new(0);
 
     // Create the subscriptions
-    let subscriptions = DefaultSubscriptions::new();
+    let subscriptions: Subscriptions = Subscriptions::new();
 
     // Assemble our Data Model handler by composing the predefined Root Endpoint handler with our custom Speaker handler
     let on_off_handler = on_off::OnOffHandler::new_standalone(

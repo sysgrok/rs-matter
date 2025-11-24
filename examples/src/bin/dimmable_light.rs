@@ -46,7 +46,7 @@ use rs_matter::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 use rs_matter::dm::devices::DEV_TYPE_DIMMABLE_LIGHT;
 use rs_matter::dm::endpoints;
 use rs_matter::dm::networks::unix::UnixNetifs;
-use rs_matter::dm::subscriptions::DefaultSubscriptions;
+use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::IMBuffer;
 use rs_matter::dm::{
     Async, AsyncHandler, AsyncMetadata, Cluster, DataModel, Dataver, EmptyHandler, Endpoint,
@@ -75,7 +75,7 @@ mod mdns;
 // as well as just allocating the objects on-stack or on the heap.
 static MATTER: StaticCell<Matter> = StaticCell::new();
 static BUFFERS: StaticCell<PooledBuffers<10, NoopRawMutex, IMBuffer>> = StaticCell::new();
-static SUBSCRIPTIONS: StaticCell<DefaultSubscriptions> = StaticCell::new();
+static SUBSCRIPTIONS: StaticCell<Subscriptions> = StaticCell::new();
 static PSM: StaticCell<Psm<4096>> = StaticCell::new();
 
 #[cfg(feature = "chip-test")]
@@ -117,7 +117,7 @@ fn run() -> Result<(), Error> {
         "Matter memory: Matter (BSS)={}B, IM Buffers (BSS)={}B, Subscriptions (BSS)={}B",
         core::mem::size_of::<Matter>(),
         core::mem::size_of::<PooledBuffers<10, NoopRawMutex, IMBuffer>>(),
-        core::mem::size_of::<DefaultSubscriptions>()
+        core::mem::size_of::<Subscriptions>()
     );
 
     let matter = MATTER.uninit().init_with(Matter::init(
@@ -136,9 +136,7 @@ fn run() -> Result<(), Error> {
     let buffers = BUFFERS.uninit().init_with(PooledBuffers::init(0));
 
     // Create the subscriptions
-    let subscriptions = SUBSCRIPTIONS
-        .uninit()
-        .init_with(DefaultSubscriptions::init());
+    let subscriptions = SUBSCRIPTIONS.uninit().init_with(Subscriptions::init());
 
     // OnOff cluster setup
     let on_off_handler =

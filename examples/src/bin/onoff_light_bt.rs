@@ -49,7 +49,7 @@ use rs_matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter::dm::endpoints;
 use rs_matter::dm::networks::unix::UnixNetifs;
 use rs_matter::dm::networks::wireless::{NetCtlState, NetCtlWithStatusImpl, WifiNetworks};
-use rs_matter::dm::subscriptions::DefaultSubscriptions;
+use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::{
     Async, AsyncHandler, AsyncMetadata, DataModel, Dataver, EmptyHandler, Endpoint, EpClMatcher,
     Node,
@@ -130,7 +130,7 @@ fn run<N: NetCtl + WifiDiag>(connection: &Connection, net_ctl: N) -> Result<(), 
     let buffers = PooledBuffers::<10, NoopRawMutex, _>::new(0);
 
     // Create the subscriptions
-    let subscriptions = DefaultSubscriptions::new();
+    let subscriptions: Subscriptions = Subscriptions::new();
 
     // Our on-off cluster
     let on_off_handler = on_off::OnOffHandler::new_standalone(

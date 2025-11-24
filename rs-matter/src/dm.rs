@@ -554,7 +554,7 @@ where
                     report.id,
                     report.fabric_idx,
                     report.peer_node_id,
-                    |endpoint_id, cluster_id| report.skip(endpoint_id, cluster_id),
+                    |endpoint_id, cluster_id| report.changes().skip(endpoint_id, cluster_id),
                     rx,
                     &mut tx,
                     &mut exchange,
@@ -587,7 +587,7 @@ where
         Ok(timeout_instant)
     }
 
-    /// A utility to check whether a timed request has timed out, and if so, send a timout status response
+    /// A utility to check whether a timed request has timed out, and if so, send a timeout status response
     async fn timed_out(
         &self,
         exchange: &mut Exchange<'_>,
@@ -790,10 +790,12 @@ where
     pub fn notify_cluster_changed(&self, endpoint_id: EndptId, cluster_id: ClusterId) {
         let subscriptions_buffers = self.subscriptions_buffers.borrow();
 
-        self.subscriptions.notify_cluster_changed::<B>(
+        self.subscriptions.notify_cluster_changed(
             endpoint_id,
             cluster_id,
-            &subscriptions_buffers,
+            subscriptions_buffers
+                .iter()
+                .map(|buffer| buffer.buffer.as_slice()),
         );
     }
 }

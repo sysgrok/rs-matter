@@ -47,7 +47,7 @@ use rs_matter::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 use rs_matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter::dm::endpoints;
 use rs_matter::dm::networks::unix::UnixNetifs;
-use rs_matter::dm::subscriptions::DefaultSubscriptions;
+use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::{
     Async, AsyncHandler, AsyncMetadata, DataModel, Dataver, EmptyHandler, Endpoint, EpClMatcher,
     Node,
@@ -86,7 +86,7 @@ const PERSIST_FILE_NAME: &str = "/tmp/chip_kvs";
 static MATTER: StaticCell<Matter> = StaticCell::new();
 static BUFFERS: StaticCell<PooledBuffers<10, NoopRawMutex, rs_matter::dm::IMBuffer>> =
     StaticCell::new();
-static SUBSCRIPTIONS: StaticCell<DefaultSubscriptions> = StaticCell::new();
+static SUBSCRIPTIONS: StaticCell<Subscriptions> = StaticCell::new();
 static PSM: StaticCell<Psm<32768>> = StaticCell::new();
 static UNIT_TESTING_DATA: StaticCell<RefCell<UnitTestingHandlerData>> = StaticCell::new();
 
@@ -109,7 +109,7 @@ fn main() -> Result<(), Error> {
         "Matter memory: Matter (BSS)={}B, IM Buffers (BSS)={}B, Subscriptions (BSS)={}B",
         core::mem::size_of::<Matter>(),
         core::mem::size_of::<PooledBuffers<10, NoopRawMutex, rs_matter::dm::IMBuffer>>(),
-        core::mem::size_of::<DefaultSubscriptions>()
+        core::mem::size_of::<Subscriptions>()
     );
 
     let matter = MATTER.uninit().init_with(Matter::init(
@@ -128,9 +128,7 @@ fn main() -> Result<(), Error> {
     let buffers = BUFFERS.uninit().init_with(PooledBuffers::init(0));
 
     // Create the subscriptions
-    let subscriptions = SUBSCRIPTIONS
-        .uninit()
-        .init_with(DefaultSubscriptions::init());
+    let subscriptions = SUBSCRIPTIONS.uninit().init_with(Subscriptions::init());
 
     // Our on-off cluster
     let on_off_handler = OnOffHandler::new_standalone(
