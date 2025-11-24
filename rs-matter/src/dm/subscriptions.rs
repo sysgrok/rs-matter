@@ -21,10 +21,18 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::Instant;
 
+use crate::dm::IMBuffer;
+use crate::dm::SubscriptionBuffer;
 use crate::dm::{ClusterId, EndptId};
+use crate::error::Error;
 use crate::fabric::MAX_FABRICS;
+use crate::im::SubscribeReq;
+use crate::tlv::TLVElement;
 use crate::utils::cell::RefCell;
+use crate::utils::init::IntoFallibleInit;
 use crate::utils::init::{init, Init};
+use crate::utils::storage::pooled::BufferAccess;
+use crate::utils::storage::Vec;
 use crate::utils::sync::blocking::Mutex;
 use crate::utils::sync::Notification;
 
@@ -35,6 +43,43 @@ pub const DEFAULT_MAX_SUBSCRIPTIONS: usize = MAX_FABRICS * 3;
 
 /// A type alias for `Subscriptions` with the default maximum number of subscriptions.
 pub type DefaultSubscriptions = Subscriptions<DEFAULT_MAX_SUBSCRIPTIONS>;
+
+pub(crate) struct SubscriptionReport {
+    pub(crate) fabric_idx: NonZeroU8,
+    pub(crate) peer_node_id: u64,
+    pub(crate) session_id: Option<u32>,
+    pub(crate) id: u32,
+    pub(crate) changed_clusters: Vec<(EndptId, ClusterId), 4>,
+    pub(crate) changed_all: bool,
+}
+
+impl SubscriptionReport {
+    pub(crate) fn new() -> Self {
+        Self {
+            fabric_idx: NonZeroU8::new(1).unwrap(),
+            peer_node_id: 0,
+            session_id: None,
+            id: 0,
+            changed_clusters: Vec::new(),
+            changed_all: false,
+        }
+    }
+
+    // pub(crate) fn init() -> impl Init<Self> {
+    //     init!(Self {
+    //         fabric_idx: NonZeroU8::new(1).unwrap(),
+    //         peer_node_id: 0,
+    //         session_id: None,
+    //         id: 0,
+    //         changed_clusters <- Vec::init(),
+    //         changed_all: false,
+    //     })
+    // }
+
+    pub(crate) fn skip(&self, endpoint: EndptId, cluster: ClusterId) -> bool {
+        !self.changed_all && !self.changed_clusters.contains(&(endpoint, cluster))
+    }
+}
 
 struct Subscription {
     fabric_idx: NonZeroU8,
@@ -47,14 +92,19 @@ struct Subscription {
     max_int_secs: u16,
     // TODO: Change to `Option<Instant>` to avoid using `Instant::MAX` as a sentinel value
     reported_at: Instant,
-    changed: bool,
+    changed_clusters: Vec<(EndptId, ClusterId), 4>,
+    changed_all: bool,
 }
 
 impl Subscription {
+    pub fn changed(&self) -> bool {
+        self.changed_all || !self.changed_clusters.is_empty()
+    }
+
     pub fn report_due(&self, now: Instant) -> bool {
         // Either the data for the subscription had changed and therefore we need to report,
         // or the data for the subscription had not changed yet, however the report interval is due
-        self.changed && self.expired(self.min_int_secs, now)
+        self.changed() && self.expired(self.min_int_secs, now)
             || self.expired(self.min_int_secs.max(self.max_int_secs / 2), now)
     }
 
@@ -72,7 +122,7 @@ impl Subscription {
 
 struct SubscriptionsInner<const N: usize> {
     next_subscription_id: u32,
-    subscriptions: crate::utils::storage::Vec<Subscription, N>,
+    subscriptions: Vec<Subscription, N>,
 }
 
 impl<const N: usize> SubscriptionsInner<N> {
@@ -81,7 +131,7 @@ impl<const N: usize> SubscriptionsInner<N> {
     const fn new() -> Self {
         Self {
             next_subscription_id: 1,
-            subscriptions: crate::utils::storage::Vec::new(),
+            subscriptions: Vec::new(),
         }
     }
 
@@ -135,18 +185,62 @@ where
     /// # Arguments
     /// - `endpoint_id`: The endpoint ID of the cluster that had changed.
     /// - `cluster_id`: The cluster ID of the cluster that had changed.
-    pub fn notify_cluster_changed(&self, _endpoint_id: EndptId, _cluster_id: ClusterId) {
-        // TODO: Make use of the endpoint_id and cluster_id parameters
-        // to implement more intelligent reporting on subscriptions
-
+    /// - `subscriptions_buffers`: The subscription buffers of all active subscriptions.
+    pub(crate) fn notify_cluster_changed<B>(
+        &self,
+        endpoint_id: EndptId,
+        cluster_id: ClusterId,
+        subscriptions_buffers: &[SubscriptionBuffer<B::Buffer<'_>>],
+    ) where
+        B: BufferAccess<IMBuffer>,
+    {
         self.state.lock(|internal| {
             let subscriptions = &mut internal.borrow_mut().subscriptions;
-            for sub in subscriptions.iter_mut() {
-                sub.changed = true;
+            for (sub, buffer) in subscriptions.iter_mut().zip(subscriptions_buffers.iter()) {
+                if !sub.changed_all
+                    && !sub.changed_clusters.contains(&(endpoint_id, cluster_id))
+                    && Self::contains_cluster::<B>(buffer, endpoint_id, cluster_id).unwrap_or(false)
+                {
+                    if sub.changed_clusters.len() < sub.changed_clusters.capacity() {
+                        sub.changed_clusters
+                            .push((endpoint_id, cluster_id))
+                            .unwrap();
+                    } else {
+                        // No space to track individual changed clusters anymore, mark the whole subscription as changed
+                        sub.changed_all = true;
+                    }
+                }
             }
         });
 
         self.notification.notify();
+    }
+
+    fn contains_cluster<B>(
+        subscription_buffer: &SubscriptionBuffer<B::Buffer<'_>>,
+        endpoint_id: EndptId,
+        cluster_id: ClusterId,
+    ) -> Result<bool, Error>
+    where
+        B: BufferAccess<IMBuffer>,
+    {
+        let sub_req = SubscribeReq::new(TLVElement::new(&subscription_buffer.buffer));
+
+        let requests = sub_req.attr_requests()?;
+
+        if let Some(requests) = requests {
+            for attr_req in requests {
+                let attr_req = attr_req?;
+
+                if attr_req.endpoint.map(|e| e == endpoint_id).unwrap_or(true)
+                    && attr_req.cluster.map(|c| c == cluster_id).unwrap_or(true)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     }
 
     pub(crate) fn add(
@@ -164,17 +258,23 @@ where
 
             state
                 .subscriptions
-                .push(Subscription {
-                    fabric_idx,
-                    peer_node_id,
-                    session_id: Some(session_id),
-                    id,
-                    min_int_secs,
-                    max_int_secs,
-                    reported_at: Instant::MAX,
-                    changed: false,
-                })
+                .push_init(
+                    init!(Subscription {
+                        fabric_idx,
+                        peer_node_id,
+                        session_id: Some(session_id),
+                        id,
+                        min_int_secs,
+                        max_int_secs,
+                        reported_at: Instant::MAX,
+                        changed_clusters <- Vec::init(),
+                        changed_all: false,
+                    })
+                    .into_fallible(),
+                    || (),
+                )
                 .map(|_| id)
+                .map_err(|_| ())
                 .ok()
         })
     }
@@ -189,7 +289,8 @@ where
 
             if let Some(sub) = subscriptions.iter_mut().find(|sub| sub.id == id) {
                 sub.reported_at = Instant::now();
-                sub.changed = false;
+                sub.changed_clusters.clear();
+                sub.changed_all = false;
 
                 true
             } else {
@@ -253,20 +354,33 @@ where
 
     /// Note that this method has a side effect:
     /// it updates the `reported_at` field of the subscription that is returned.
-    pub(crate) fn find_report_due(
-        &self,
-        now: Instant,
-    ) -> Option<(NonZeroU8, u64, Option<u32>, u32)> {
+    pub(crate) fn find_report_due(&self, now: Instant, report: &mut SubscriptionReport) -> bool {
         self.state.lock(|internal| {
-            internal
-                .borrow_mut()
-                .subscriptions
-                .iter_mut()
-                .find(|sub| sub.report_due(now))
-                .map(|sub| {
+            let mut internal = internal.borrow_mut();
+
+            for sub in &mut internal.subscriptions {
+                if sub.report_due(now) {
                     sub.reported_at = now;
-                    (sub.fabric_idx, sub.peer_node_id, sub.session_id, sub.id)
-                })
+
+                    report.fabric_idx = sub.fabric_idx;
+                    report.peer_node_id = sub.peer_node_id;
+                    report.session_id = sub.session_id;
+                    report.id = sub.id;
+                    report.changed_clusters.clear();
+                    report
+                        .changed_clusters
+                        .extend_from_slice(&sub.changed_clusters)
+                        .unwrap();
+                    report.changed_all = sub.changed_all;
+
+                    sub.changed_clusters.clear();
+                    sub.changed_all = false;
+
+                    return true;
+                }
+            }
+
+            false
         })
     }
 }

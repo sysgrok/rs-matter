@@ -56,11 +56,14 @@ impl<'a> Node<'a> {
     /// accessible by the accessor and whether they should be served based on the
     /// fabric filtering and dataver filtering rules and filter out the inaccessible ones (wildcard reads)
     /// or report an error status for the non-wildcard ones.
-    pub fn read<'m>(
+    pub fn read<'m, F>(
         &'m self,
         req: &'m ReportDataReq,
+        skip_attr: F,
         accessor: &'m Accessor<'m>,
     ) -> Result<impl Iterator<Item = Result<Result<AttrDetails<'m>, AttrStatus>, Error>> + 'm, Error>
+    where
+        F: Fn(EndptId, ClusterId) -> bool + 'm,
     {
         let dataver_filters = req.dataver_filters()?;
         let fabric_filtered = req.fabric_filtered()?;
@@ -78,6 +81,7 @@ impl<'a> Node<'a> {
                     })
                 })
             }),
+            skip_attr,
         ))
     }
 
@@ -101,6 +105,7 @@ impl<'a> Node<'a> {
             accessor,
             req.timed_request()?,
             Some(req.write_requests()?.into_iter()),
+            |_, _| false,
         ))
     }
 
@@ -124,6 +129,7 @@ impl<'a> Node<'a> {
             accessor,
             req.timed_request()?,
             req.inv_requests()?.map(move |reqs| reqs.into_iter()),
+            |_, _| false,
         ))
     }
 }
@@ -377,10 +383,7 @@ impl<'a> PathExpansionItem<'a> for CmdData<'a> {
 /// While the iterator can be (and used to be) implemented by using monadic combinators,
 /// this implementation is done in a more imperative way to avoid the overhead of monadic
 /// combinators in terms of memory size.
-struct PathExpander<'a, T, I>
-where
-    I: Iterator<Item = Result<T, Error>>,
-{
+struct PathExpander<'a, T, I, F> {
     /// The metatdata node to expand the paths on.
     node: &'a Node<'a>,
     /// The accessor to check the access rights.
@@ -389,6 +392,7 @@ where
     timed: bool,
     /// The paths to expand.
     items: Option<I>,
+    skip_leaf: F,
     /// The current path item being expanded.
     item: Option<T>,
     /// The current endpoint index if the path is a wildcard one.
@@ -399,23 +403,26 @@ where
     leaf_index: u16,
 }
 
-impl<'a, T, I> PathExpander<'a, T, I>
+impl<'a, T, I, F> PathExpander<'a, T, I, F>
 where
     I: Iterator<Item = Result<T, Error>>,
     T: PathExpansionItem<'a>,
+    F: Fn(EndptId, ClusterId) -> bool,
 {
     /// Create a new path expander with the given node, accessor, and paths.
     pub const fn new(
         node: &'a Node<'a>,
         accessor: &'a Accessor<'a>,
         timed: bool,
-        paths: Option<I>,
+        items: Option<I>,
+        skip_leaf: F,
     ) -> Self {
         Self {
             node,
             accessor,
             timed,
-            items: paths,
+            items,
+            skip_leaf,
             item: None,
             endpoint_index: 0,
             cluster_index: 0,
@@ -446,6 +453,8 @@ where
             }
         }
 
+        let mut skip = false;
+
         while (self.endpoint_index as usize) < self.node.endpoints.len() {
             let endpoint = &self.node.endpoints[self.endpoint_index as usize];
 
@@ -474,55 +483,61 @@ where
                             };
 
                             if path.leaf.is_none() || path.leaf == Some(leaf_id as _) {
-                                // Leaf found, check its access rights
+                                // Leaf found
 
-                                let check = if matches!(T::OPERATION, Operation::Invoke) {
-                                    cluster.check_cmd_access(
-                                        self.accessor,
-                                        self.timed,
-                                        GenericPath::new(
-                                            Some(endpoint.id),
-                                            Some(cluster.id),
-                                            Some(leaf_id),
-                                        ),
-                                        unwrap!(cluster
-                                            .commands()
-                                            .map(|cmd| cmd.id)
-                                            .nth(self.leaf_index as usize)),
-                                    )
-                                } else {
-                                    // TODO: Need to also check that the code is not trying to access an element of an array
-                                    // when the attribute is not an array
+                                // Check if we should skip it
+                                skip = !command && (self.skip_leaf)(endpoint.id, cluster.id);
 
-                                    cluster.check_attr_access(
-                                        self.accessor,
-                                        self.timed,
-                                        GenericPath::new(
-                                            Some(endpoint.id),
-                                            Some(cluster.id),
-                                            Some(leaf_id),
-                                        ),
-                                        matches!(T::OPERATION, Operation::Write),
-                                        unwrap!(cluster
-                                            .attributes()
-                                            .map(|attr| attr.id)
-                                            .nth(self.leaf_index as usize)),
-                                    )
-                                };
+                                if !skip {
+                                    // Check its access rights
+                                    let check = if matches!(T::OPERATION, Operation::Invoke) {
+                                        cluster.check_cmd_access(
+                                            self.accessor,
+                                            self.timed,
+                                            GenericPath::new(
+                                                Some(endpoint.id),
+                                                Some(cluster.id),
+                                                Some(leaf_id),
+                                            ),
+                                            unwrap!(cluster
+                                                .commands()
+                                                .map(|cmd| cmd.id)
+                                                .nth(self.leaf_index as usize)),
+                                        )
+                                    } else {
+                                        // TODO: Need to also check that the code is not trying to access an element of an array
+                                        // when the attribute is not an array
 
-                                match check {
-                                    Ok(()) => {
-                                        // Because on the next call we should start from the next leaf or if leaves
-                                        // are over, from the next cluster and so on
-                                        self.leaf_index += 1;
+                                        cluster.check_attr_access(
+                                            self.accessor,
+                                            self.timed,
+                                            GenericPath::new(
+                                                Some(endpoint.id),
+                                                Some(cluster.id),
+                                                Some(leaf_id),
+                                            ),
+                                            matches!(T::OPERATION, Operation::Write),
+                                            unwrap!(cluster
+                                                .attributes()
+                                                .map(|attr| attr.id)
+                                                .nth(self.leaf_index as usize)),
+                                        )
+                                    };
 
-                                        return Ok(Some((endpoint.id, cluster.id, leaf_id)));
-                                    }
-                                    Err(status) => {
-                                        if !path.is_wildcard() {
-                                            // Only return if non-wildcard, else just skip the error and
-                                            // continue scanning
-                                            return Err(status);
+                                    match check {
+                                        Ok(()) => {
+                                            // Because on the next call we should start from the next leaf or if leaves
+                                            // are over, from the next cluster and so on
+                                            self.leaf_index += 1;
+
+                                            return Ok(Some((endpoint.id, cluster.id, leaf_id)));
+                                        }
+                                        Err(status) => {
+                                            if !path.is_wildcard() {
+                                                // Only return if non-wildcard, else just skip the error and
+                                                // continue scanning
+                                                return Err(status);
+                                            }
                                         }
                                     }
                                 }
@@ -531,7 +546,7 @@ where
                             self.leaf_index += 1;
                         }
 
-                        if !path.is_wildcard() {
+                        if !skip && !path.is_wildcard() {
                             if command {
                                 return Err(IMStatusCode::UnsupportedCommand);
                             } else {
@@ -545,7 +560,7 @@ where
                     self.cluster_index += 1;
                 }
 
-                if !path.is_wildcard() {
+                if !skip && !path.is_wildcard() {
                     return Err(IMStatusCode::UnsupportedCluster);
                 }
 
@@ -555,7 +570,7 @@ where
             self.endpoint_index += 1;
         }
 
-        if !path.is_wildcard() {
+        if !skip && !path.is_wildcard() {
             Err(IMStatusCode::UnsupportedEndpoint)
         } else {
             Ok(None)
@@ -563,10 +578,11 @@ where
     }
 }
 
-impl<'a, T, I> Iterator for PathExpander<'a, T, I>
+impl<'a, T, I, F> Iterator for PathExpander<'a, T, I, F>
 where
     I: Iterator<Item = Result<T, Error>>,
     T: PathExpansionItem<'a>,
+    F: Fn(EndptId, ClusterId) -> bool,
 {
     type Item = Result<Result<T::Expanded<'a>, T::Status>, Error>;
 
@@ -695,8 +711,13 @@ mod test {
         let fab_mgr = RefCell::new(FabricMgr::new());
         let accessor = Accessor::new(0, AccessorSubjects::new(0), Some(AuthMode::Pase), &fab_mgr);
 
-        let expander =
-            PathExpander::new(node, &accessor, false, Some(input.iter().cloned().map(Ok)));
+        let expander = PathExpander::new(
+            node,
+            &accessor,
+            false,
+            Some(input.iter().cloned().map(Ok)),
+            |_, _| false,
+        );
 
         assert_eq!(
             expander

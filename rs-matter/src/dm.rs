@@ -24,6 +24,7 @@ use core::time::Duration;
 use embassy_futures::select::select3;
 use embassy_time::{Instant, Timer};
 
+use crate::dm::subscriptions::SubscriptionReport;
 use crate::error::{Error, ErrorCode};
 use crate::im::{
     IMStatusCode, InvReq, InvRespTag, OpCode, ReadReq, ReportDataReq, ReportDataRespTag,
@@ -57,11 +58,11 @@ const MAX_WRITE_ATTRS_IN_ONE_TRANS: usize = 7;
 
 pub type IMBuffer = heapless::Vec<u8, MAX_EXCHANGE_RX_BUF_SIZE>;
 
-struct SubscriptionBuffer<B> {
+pub(crate) struct SubscriptionBuffer<B> {
     fabric_idx: NonZeroU8,
     peer_node_id: u64,
     subscription_id: u32,
-    buffer: B,
+    pub(crate) buffer: B,
 }
 
 /// An `ExchangeHandler` implementation capable of handling responder exchanges for the Interaction Model protocol.
@@ -194,7 +195,7 @@ where
             HandlerInvoker::new(exchange, &self.handler, &self.buffers),
         );
 
-        resp.respond(self, &mut wb, true).await?;
+        resp.respond(|_, _| false, self, &mut wb, true).await?;
 
         Ok(())
     }
@@ -346,8 +347,9 @@ where
         let primed = self
             .report_data(
                 id,
-                fabric_idx.get(),
+                fabric_idx,
                 peer_node_id,
+                |_, _| false,
                 &rx,
                 &mut tx,
                 exchange,
@@ -468,19 +470,18 @@ where
             }
 
             loop {
-                let sub = self.subscriptions.find_report_due(now);
-
-                if let Some((fabric_idx, peer_node_id, session_id, id)) = sub {
+                let mut report = SubscriptionReport::new();
+                if self.subscriptions.find_report_due(now, &mut report) {
                     debug!(
                         "About to report data for subscription [F:{:x},P:{:x}]::{}",
-                        fabric_idx, peer_node_id, id
+                        report.fabric_idx, report.peer_node_id, report.id
                     );
 
                     let subscribed = Cell::new(false);
 
                     let _guard = scopeguard::guard((), |_| {
                         if !subscribed.get() {
-                            self.subscriptions.remove(None, None, Some(id));
+                            self.subscriptions.remove(None, None, Some(report.id));
                         }
                     });
 
@@ -490,21 +491,19 @@ where
                         .subscriptions_buffers
                         .borrow()
                         .iter()
-                        .position(|sb| sb.subscription_id == id));
+                        .position(|sb| sb.subscription_id == report.id));
                     let rx = self.subscriptions_buffers.borrow_mut().remove(index).buffer;
 
-                    let result = self
-                        .process_subscription(matter, fabric_idx, peer_node_id, session_id, id, &rx)
-                        .await;
+                    let result = self.process_subscription(matter, &report, &rx).await;
 
                     match result {
                         Ok(primed) => {
-                            if primed && self.subscriptions.mark_reported(id) {
+                            if primed && self.subscriptions.mark_reported(report.id) {
                                 let _ = self.subscriptions_buffers.borrow_mut().push(
                                     SubscriptionBuffer {
-                                        fabric_idx,
-                                        peer_node_id,
-                                        subscription_id: id,
+                                        fabric_idx: report.fabric_idx,
+                                        peer_node_id: report.peer_node_id,
+                                        subscription_id: report.id,
                                         buffer: rx,
                                     },
                                 );
@@ -534,13 +533,10 @@ where
     async fn process_subscription(
         &self,
         matter: &Matter<'_>,
-        fabric_idx: NonZeroU8,
-        peer_node_id: u64,
-        session_id: Option<u32>,
-        id: u32,
+        report: &SubscriptionReport,
         rx: &[u8],
     ) -> Result<bool, Error> {
-        let mut exchange = if let Some(session_id) = session_id {
+        let mut exchange = if let Some(session_id) = report.session_id {
             Exchange::initiate_for_session(matter, session_id)?
         } else {
             // Commented out as we have issues on HomeKit with that:
@@ -555,9 +551,10 @@ where
 
             let primed = self
                 .report_data(
-                    id,
-                    fabric_idx.get(),
-                    peer_node_id,
+                    report.id,
+                    report.fabric_idx,
+                    report.peer_node_id,
+                    |endpoint_id, cluster_id| report.skip(endpoint_id, cluster_id),
                     rx,
                     &mut tx,
                     &mut exchange,
@@ -571,7 +568,7 @@ where
         } else {
             error!(
                 "No TX buffer available for processing subscription [F:{:x},P:{:x}]::{}",
-                fabric_idx, peer_node_id, id
+                report.fabric_idx, report.peer_node_id, report.id
             );
 
             Ok(false)
@@ -630,11 +627,12 @@ where
     /// - `exchange` - the exchange to respond to
     /// - `with_dataver` - whether to include the data version in the response
     #[allow(clippy::too_many_arguments)]
-    async fn report_data(
+    async fn report_data<F>(
         &self,
         id: u32,
-        fabric_idx: u8,
+        fabric_idx: NonZeroU8,
         peer_node_id: u64,
+        skip_attr: F,
         rx: &[u8],
         tx: &mut [u8],
         exchange: &mut Exchange<'_>,
@@ -642,6 +640,7 @@ where
     ) -> Result<bool, Error>
     where
         T: DataModelHandler,
+        F: Fn(EndptId, ClusterId) -> bool,
     {
         let mut wb = WriteBuf::new(tx);
 
@@ -662,7 +661,7 @@ where
             HandlerInvoker::new(exchange, &self.handler, &self.buffers),
         );
 
-        let sub_valid = resp.respond(self, &mut wb, false).await?;
+        let sub_valid = resp.respond(skip_attr, self, &mut wb, false).await?;
 
         if !sub_valid {
             debug!(
@@ -779,6 +778,24 @@ where
             })
             .await
     }
+
+    /// Notify the instance that the data of a specific cluster had changed and that it should re-evaluate the subscriptions
+    /// and report on those that are interested in the changed data.
+    ///
+    /// This method is supposed to be called by the application code whenever it changes the data of a cluster.
+    ///
+    /// # Arguments
+    /// - `endpoint_id`: The endpoint ID of the cluster that had changed.
+    /// - `cluster_id`: The cluster ID of the cluster that had changed.
+    pub fn notify_cluster_changed(&self, endpoint_id: EndptId, cluster_id: ClusterId) {
+        let subscriptions_buffers = self.subscriptions_buffers.borrow();
+
+        self.subscriptions.notify_cluster_changed::<B>(
+            endpoint_id,
+            cluster_id,
+            &subscriptions_buffers,
+        );
+    }
 }
 
 impl<const N: usize, B, T> ExchangeHandler for DataModel<'_, N, B, T>
@@ -797,8 +814,7 @@ where
     B: BufferAccess<IMBuffer>,
 {
     fn notify(&self, endpoint_id: EndptId, cluster_id: ClusterId) {
-        self.subscriptions
-            .notify_cluster_changed(endpoint_id, cluster_id);
+        self.notify_cluster_changed(endpoint_id, cluster_id);
     }
 }
 
@@ -850,17 +866,21 @@ where
     /// - `suppress_last_resp` - whether to suppress the response from the peer. When multiple Matter messages are
     ///   being sent due to chunking, this is valid for the last chunk only, as the others - by necessity need to have a
     ///   status response by the other peer
-    async fn respond(
+    async fn respond<F>(
         &mut self,
+        skip_attr: F,
         notify: &dyn ChangeNotify,
         wb: &mut WriteBuf<'_>,
         suppress_last_resp: bool,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, Error>
+    where
+        F: Fn(EndptId, ClusterId) -> bool,
+    {
         let accessor = self.invoker.exchange().accessor()?;
 
         self.start_reply(wb)?;
 
-        for item in self.node.read(self.req, &accessor)? {
+        for item in self.node.read(self.req, skip_attr, &accessor)? {
             let item = item?;
 
             loop {
