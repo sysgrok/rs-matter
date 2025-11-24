@@ -223,6 +223,142 @@ impl<const N: usize> SubscriptionsInner<N> {
             subscriptions <- crate::utils::storage::Vec::init(),
         })
     }
+
+    /// Notify the instance that the data of a specific cluster had changed and that it should re-evaluate the subscriptions
+    /// and report on those that are interested in the changed data.
+    ///
+    /// This method is supposed to be called by the application code whenever it changes the data of a cluster.
+    ///
+    /// # Arguments
+    /// - `endpoint_id`: The endpoint ID of the cluster that had changed.
+    /// - `cluster_id`: The cluster ID of the cluster that had changed.
+    /// - `subscriptions_buffers`: The subscription buffers of all active subscriptions.
+    fn notify_cluster_changed<'a>(
+        &mut self,
+        endpoint_id: EndptId,
+        cluster_id: ClusterId,
+        subscriptions_rx: impl Iterator<Item = &'a [u8]>,
+    ) -> bool {
+        let mut changed = false;
+
+        for (sub, rx) in self.subscriptions.iter_mut().zip(subscriptions_rx) {
+            sub.changes
+                .notify_cluster_changed(endpoint_id, cluster_id, rx);
+
+            changed |= sub.changes().changed();
+        }
+
+        changed
+    }
+
+    fn add(
+        &mut self,
+        fabric_idx: NonZeroU8,
+        peer_node_id: u64,
+        session_id: u32,
+        min_int_secs: u16,
+        max_int_secs: u16,
+    ) -> Option<u32> {
+        let id = self.next_subscription_id;
+        self.next_subscription_id += 1;
+
+        self.subscriptions
+            .push_init(
+                init!(Subscription {
+                    fabric_idx,
+                    peer_node_id,
+                    session_id: Some(session_id),
+                    id,
+                    min_int_secs,
+                    max_int_secs,
+                    reported_at: Instant::MAX,
+                    changes <- SubscriptionChanges::init(),
+                })
+                .into_fallible(),
+                || (),
+            )
+            .map(|_| id)
+            .map_err(|_| ())
+            .ok()
+    }
+
+    /// Mark the subscription with the given ID as reported.
+    ///
+    /// Will return `false` if the subscription with the given ID does no longer exist, as it might be
+    /// removed by a concurrent transaction while being reported on.
+    fn mark_reported(&mut self, id: u32) -> bool {
+        if let Some(sub) = self.subscriptions.iter_mut().find(|sub| sub.id == id) {
+            sub.reported_at = Instant::now();
+            sub.changes.clear();
+
+            true
+        } else {
+            false
+        }
+    }
+
+    fn remove(
+        &mut self,
+        fabric_idx: Option<NonZeroU8>,
+        peer_node_id: Option<u64>,
+        id: Option<u32>,
+    ) {
+        while let Some(index) = self.subscriptions.iter().position(|sub| {
+            sub.fabric_idx == fabric_idx.unwrap_or(sub.fabric_idx)
+                && sub.peer_node_id == peer_node_id.unwrap_or(sub.peer_node_id)
+                && sub.id == id.unwrap_or(sub.id)
+        }) {
+            self.subscriptions.swap_remove(index);
+        }
+    }
+
+    fn find_removed_session<F>(&mut self, session_removed: F) -> Option<(NonZeroU8, u64, u32, u32)>
+    where
+        F: Fn(u32) -> bool,
+    {
+        self.subscriptions.iter().find_map(|sub| {
+            sub.session_id
+                .map(&session_removed)
+                .unwrap_or(false)
+                .then_some((
+                    sub.fabric_idx,
+                    sub.peer_node_id,
+                    unwrap!(sub.session_id),
+                    sub.id,
+                ))
+        })
+    }
+
+    fn find_expired(&mut self, now: Instant) -> Option<(NonZeroU8, u64, Option<u32>, u32)> {
+        self.subscriptions.iter().find_map(|sub| {
+            sub.is_expired(now).then_some((
+                sub.fabric_idx,
+                sub.peer_node_id,
+                sub.session_id,
+                sub.id,
+            ))
+        })
+    }
+
+    /// Note that this method has a side effect:
+    /// it updates the `reported_at` field of the subscription that is returned.
+    fn find_report_due(&mut self, now: Instant, report: &mut SubscriptionReport) -> bool {
+        for sub in &mut self.subscriptions {
+            if sub.report_due(now) {
+                sub.reported_at = now;
+
+                report.fabric_idx = sub.fabric_idx;
+                report.peer_node_id = sub.peer_node_id;
+                report.session_id = sub.session_id;
+                report.id = sub.id;
+                report.changes.load(sub.changes());
+
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 /// A utility for tracking subscriptions accepted by the data model.
@@ -274,19 +410,10 @@ where
         subscriptions_rx: impl Iterator<Item = &'a [u8]>,
     ) {
         let changed = self.state.lock(|internal| {
-            let mut changed = false;
-
-            let subscriptions = &mut internal.borrow_mut().subscriptions;
-            for (sub, rx) in subscriptions.iter_mut().zip(subscriptions_rx) {
-                sub.changes
-                    .notify_cluster_changed(endpoint_id, cluster_id, rx);
-
-                changed |= sub.changes().changed();
-            }
-
-            changed
+            internal
+                .borrow_mut()
+                .notify_cluster_changed(endpoint_id, cluster_id, subscriptions_rx)
         });
-
         if changed {
             self.notification.notify();
         }
@@ -301,29 +428,13 @@ where
         max_int_secs: u16,
     ) -> Option<u32> {
         self.state.lock(|internal| {
-            let mut state = internal.borrow_mut();
-            let id = state.next_subscription_id;
-            state.next_subscription_id += 1;
-
-            state
-                .subscriptions
-                .push_init(
-                    init!(Subscription {
-                        fabric_idx,
-                        peer_node_id,
-                        session_id: Some(session_id),
-                        id,
-                        min_int_secs,
-                        max_int_secs,
-                        reported_at: Instant::MAX,
-                        changes <- SubscriptionChanges::init(),
-                    })
-                    .into_fallible(),
-                    || (),
-                )
-                .map(|_| id)
-                .map_err(|_| ())
-                .ok()
+            internal.borrow_mut().add(
+                fabric_idx,
+                peer_node_id,
+                session_id,
+                min_int_secs,
+                max_int_secs,
+            )
         })
     }
 
@@ -332,18 +443,8 @@ where
     /// Will return `false` if the subscription with the given ID does no longer exist, as it might be
     /// removed by a concurrent transaction while being reported on.
     pub(crate) fn mark_reported(&self, id: u32) -> bool {
-        self.state.lock(|internal| {
-            let subscriptions = &mut internal.borrow_mut().subscriptions;
-
-            if let Some(sub) = subscriptions.iter_mut().find(|sub| sub.id == id) {
-                sub.reported_at = Instant::now();
-                sub.changes.clear();
-
-                true
-            } else {
-                false
-            }
-        })
+        self.state
+            .lock(|internal| internal.borrow_mut().mark_reported(id))
     }
 
     pub(crate) fn remove(
@@ -352,16 +453,8 @@ where
         peer_node_id: Option<u64>,
         id: Option<u32>,
     ) {
-        self.state.lock(|internal| {
-            let subscriptions = &mut internal.borrow_mut().subscriptions;
-            while let Some(index) = subscriptions.iter().position(|sub| {
-                sub.fabric_idx == fabric_idx.unwrap_or(sub.fabric_idx)
-                    && sub.peer_node_id == peer_node_id.unwrap_or(sub.peer_node_id)
-                    && sub.id == id.unwrap_or(sub.id)
-            }) {
-                subscriptions.swap_remove(index);
-            }
-        })
+        self.state
+            .lock(|internal| internal.borrow_mut().remove(fabric_idx, peer_node_id, id))
     }
 
     pub(crate) fn find_removed_session<F>(
@@ -371,60 +464,27 @@ where
     where
         F: Fn(u32) -> bool,
     {
-        self.state.lock(|internal| {
-            internal.borrow_mut().subscriptions.iter().find_map(|sub| {
-                sub.session_id
-                    .map(&session_removed)
-                    .unwrap_or(false)
-                    .then_some((
-                        sub.fabric_idx,
-                        sub.peer_node_id,
-                        unwrap!(sub.session_id),
-                        sub.id,
-                    ))
-            })
-        })
+        self.state
+            .lock(|internal| internal.borrow_mut().find_removed_session(session_removed))
     }
 
     pub(crate) fn find_expired(&self, now: Instant) -> Option<(NonZeroU8, u64, Option<u32>, u32)> {
-        self.state.lock(|internal| {
-            internal.borrow_mut().subscriptions.iter().find_map(|sub| {
-                sub.is_expired(now).then_some((
-                    sub.fabric_idx,
-                    sub.peer_node_id,
-                    sub.session_id,
-                    sub.id,
-                ))
-            })
-        })
+        self.state
+            .lock(|internal| internal.borrow_mut().find_expired(now))
     }
 
     /// Note that this method has a side effect:
     /// it updates the `reported_at` field of the subscription that is returned.
     pub(crate) fn find_report_due(&self, now: Instant, report: &mut SubscriptionReport) -> bool {
-        self.state.lock(|internal| {
-            let mut internal = internal.borrow_mut();
-
-            for sub in &mut internal.subscriptions {
-                if sub.report_due(now) {
-                    sub.reported_at = now;
-
-                    report.fabric_idx = sub.fabric_idx;
-                    report.peer_node_id = sub.peer_node_id;
-                    report.session_id = sub.session_id;
-                    report.id = sub.id;
-                    report.changes.load(sub.changes());
-
-                    return true;
-                }
-            }
-
-            false
-        })
+        self.state
+            .lock(|internal| internal.borrow_mut().find_report_due(now, report))
     }
 }
 
-impl<const N: usize> Default for Subscriptions<N> {
+impl<const N: usize, M> Default for Subscriptions<N, M>
+where
+    M: RawMutex,
+{
     fn default() -> Self {
         Self::new()
     }
