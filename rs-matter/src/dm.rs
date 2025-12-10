@@ -58,13 +58,6 @@ const MAX_WRITE_ATTRS_IN_ONE_TRANS: usize = 7;
 
 pub type IMBuffer = heapless::Vec<u8, MAX_EXCHANGE_RX_BUF_SIZE>;
 
-pub(crate) struct SubscriptionBuffer<B> {
-    fabric_idx: NonZeroU8,
-    peer_node_id: u64,
-    subscription_id: u32,
-    pub(crate) buffer: B,
-}
-
 /// An `ExchangeHandler` implementation capable of handling responder exchanges for the Interaction Model protocol.
 /// The implementation needs a `DataModelHandler` instance to interact with the underlying clusters of the data model.
 pub struct DataModel<'a, const N: usize, B, T>
@@ -74,7 +67,7 @@ where
     matter: &'a Matter<'a>,
     buffers: &'a B,
     subscriptions: &'a Subscriptions<N>,
-    subscriptions_buffers: RefCell<heapless::Vec<SubscriptionBuffer<B::Buffer<'a>>, N>>,
+    subscriptions_buffers: RefCell<heapless::Vec<B::Buffer<'a>, N>>,
     handler: T,
 }
 
@@ -312,10 +305,7 @@ where
 
         if !req.keep_subs()? {
             self.subscriptions
-                .remove(Some(fabric_idx), Some(peer_node_id), None);
-            self.subscriptions_buffers
-                .borrow_mut()
-                .retain(|sb| sb.fabric_idx != fabric_idx || sb.peer_node_id != peer_node_id);
+                .remove(&mut self.subscriptions_buffers.borrow_mut(), Some(fabric_idx), Some(peer_node_id), None);
 
             debug!(
                 "All subscriptions for [F:{:x},P:{:x}] removed",
@@ -327,6 +317,7 @@ where
         let min_int_secs = req.min_int_floor()?;
 
         let Some(id) = self.subscriptions.add(
+            &mut self.subscriptions_buffers.borrow_mut(),
             fabric_idx,
             peer_node_id,
             exchange.id().session_id(),
@@ -430,51 +421,57 @@ where
 
             select3(&mut notification, &mut timeout, &mut session_removed).await;
 
-            while let Some((fabric_idx, peer_node_id, session_id, id)) =
-                self.subscriptions.find_removed_session(|session_id| {
+            let mut report = SubscriptionReport::new();
+
+            while self.subscriptions.find_removed_session(
+                |session_id| {
                     matter
                         .transport_mgr
                         .session_mgr
                         .borrow_mut()
                         .get(session_id)
                         .is_none()
-                })
+                },
+                &mut report,
+            )
             {
-                self.subscriptions.remove(None, None, Some(id));
+                self.subscriptions.remove(None, None, Some(report.id));
                 self.subscriptions_buffers
                     .borrow_mut()
-                    .retain(|sb| sb.subscription_id != id);
+                    .retain(|sb| sb.subscription_id != report.id);
 
                 debug!(
                     "Subscription [F:{:x},P:{:x}]::{} removed since its session ({}) had been removed too",
-                    fabric_idx,
-                    peer_node_id,
-                    id,
-                    session_id
+                    report.fabric_idx,
+                    report.peer_node_id,
+                    report.id,
+                    report.session_id
                 );
             }
 
             let now = Instant::now();
 
-            while let Some((fabric_idx, peer_node_id, _, id)) = self.subscriptions.find_expired(now)
-            {
-                self.subscriptions.remove(None, None, Some(id));
+            while self.subscriptions.find_expired(now, &mut report) {
+                self.subscriptions.remove(None, None, Some(report.id));
                 self.subscriptions_buffers
                     .borrow_mut()
-                    .retain(|sb| sb.subscription_id != id);
+                    .retain(|sb| sb.subscription_id != report.id);
 
                 warn!(
                     "Subscription [F:{:x},P:{:x}]::{} removed due to inactivity",
-                    fabric_idx, peer_node_id, id
+                    report.fabric_idx,
+                    report.peer_node_id,
+                    report.id
                 );
             }
 
             loop {
-                let mut report = SubscriptionReport::new();
                 if self.subscriptions.find_report_due(now, &mut report) {
                     debug!(
                         "About to report data for subscription [F:{:x},P:{:x}]::{}",
-                        report.fabric_idx, report.peer_node_id, report.id
+                        report.fabric_idx, 
+                        report.peer_node_id, 
+                        report.id
                     );
 
                     let subscribed = Cell::new(false);
