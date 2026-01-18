@@ -19,7 +19,7 @@ use core::num::NonZeroU8;
 use core::time::Duration;
 
 use crate::cert::{CertRef, MAX_CERT_TLV_LEN};
-use crate::crypto::{Crypto, FabricSecretKey, SecretKey, FABRIC_SECRET_KEY_BUF_DEFAULT};
+use crate::crypto::{Crypto, FabricSecretKey, SecretKey, FABRIC_SECRET_KEY_ZEROED};
 use crate::error::{Error, ErrorCode};
 use crate::fabric::{Fabric, FabricMgr};
 use crate::im::IMStatusCode;
@@ -205,7 +205,7 @@ impl FailSafe {
             NocFlags::ADD_CSR_REQ_RECVD,
         )?;
 
-        let mut dehydrated_secret_key = FABRIC_SECRET_KEY_BUF_DEFAULT;
+        let mut dehydrated_secret_key = FABRIC_SECRET_KEY_ZEROED;
 
         let secret_key = crypto.secret_key_secp256r1()?;
         secret_key.dehydrate(&mut dehydrated_secret_key)?;
@@ -234,7 +234,7 @@ impl FailSafe {
             NocFlags::UPDATE_CSR_REQ_RECVD,
         )?;
 
-        let mut dehydrated_secret_key = FABRIC_SECRET_KEY_BUF_DEFAULT;
+        let mut dehydrated_secret_key = FABRIC_SECRET_KEY_ZEROED;
 
         let secret_key = crypto.secret_key_secp256r1()?;
         secret_key.dehydrate(&mut dehydrated_secret_key)?;
