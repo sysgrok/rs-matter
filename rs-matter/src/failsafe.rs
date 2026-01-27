@@ -22,6 +22,7 @@ use crate::cert::{CertRef, MAX_CERT_TLV_LEN};
 use crate::crypto::{Crypto, FabricSecretKey, SecretKey, FABRIC_SECRET_KEY_ZEROED};
 use crate::error::{Error, ErrorCode};
 use crate::fabric::{Fabric, FabricMgr};
+use crate::group_keys::KeySet;
 use crate::im::IMStatusCode;
 use crate::tlv::TLVElement;
 use crate::transport::session::SessionMode;
@@ -207,8 +208,8 @@ impl FailSafe {
 
         let mut secret_key = FABRIC_SECRET_KEY_ZEROED;
 
-        let crypto_secret_key = crypto.secp256r1_secret_key_random()?;
-        crypto_secret_key.canon_into(&mut secret_key);
+        let crypto_secret_key = crypto.generate_secret_key()?;
+        crypto_secret_key.write_canon(&mut secret_key);
 
         self.secret_key = Some(secret_key);
 
@@ -236,9 +237,7 @@ impl FailSafe {
 
         let mut secret_key = FABRIC_SECRET_KEY_ZEROED;
 
-        crypto
-            .secp256r1_secret_key_random()?
-            .canon_into(&mut secret_key);
+        crypto.generate_secret_key()?.write_canon(&mut secret_key);
 
         self.secret_key = Some(secret_key);
 
@@ -332,6 +331,8 @@ impl FailSafe {
         let noc_p = CertRef::new(TLVElement::new(noc));
         let compressed_fabric_id =
             Fabric::compute_compressed_fabric_id(&self.root_ca, noc_p.get_fabric_id()?, &crypto);
+
+        let ipk = KeySet::new_from(&crypto, ipk, &compressed_fabric_id)?;
 
         let fab_idx = fabric_mgr
             .borrow_mut()
