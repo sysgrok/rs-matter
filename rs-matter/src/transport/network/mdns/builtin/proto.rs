@@ -152,10 +152,9 @@ impl Host<'_> {
             // Always include TXT records in broadcasts.
             service.add_txt(&mut answer, ttl_sec)?;
 
-            // Service subtypes are useful for discovery filtering but not critical.
-            // They are still available via mDNS query responses.
-            // Comment them out in broadcasts to avoid buffer overflow with multiple fabrics.
-            // TODO: Consider splitting large broadcasts or implementing incremental updates
+            // TODO: Apple commissioning - since Apple commissions > 1 fabric
+            // we are overflowing the DNS broadcast record.
+            // Service subtypes are still available via mDNS query responses.
             //service.add_service_subtypes(&mut answer, ttl_sec)?;
             //service.add_dns_sd_service_subtypes(&mut answer, ttl_sec)?;
 
