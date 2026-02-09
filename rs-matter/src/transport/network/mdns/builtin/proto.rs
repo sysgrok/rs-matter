@@ -996,7 +996,7 @@ mod tests {
         // Look for TXT records in the answer section
         let mut found_txt = false;
         let mut has_discriminator = false;
-        
+
         for answer in message.answer().unwrap() {
             let answer = unwrap!(answer, "Should be able to parse answer");
             if answer.rtype() == Rtype::TXT {
@@ -1024,7 +1024,7 @@ mod tests {
             found_txt,
             "Broadcast should include TXT records with commissioning data"
         );
-        
+
         assert!(
             has_discriminator,
             "TXT record should contain discriminator (D=)"
