@@ -953,6 +953,84 @@ mod tests {
         TEST_SERVICES.run();
     }
 
+    #[test]
+    fn test_broadcast_includes_txt() {
+        // Verify that broadcasts include TXT records which are critical for Matter commissioning
+        let host = Host {
+            id: 0,
+            hostname: "test-device",
+            ip: Ipv4Addr::new(192, 168, 1, 100),
+            ipv6: Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+        };
+
+        let services: &[Service] = &[Service {
+            name: "test-matter",
+            service: "_matterc",
+            protocol: "_udp",
+            service_protocol: "_matterc._udp",
+            port: 5540,
+            service_subtypes: &["_L840", "_S3", "_V65521P32769", "_CM"],
+            txt_kvs: &[("D", "840"), ("CM", "1"), ("VP", "65521+32769")],
+        }];
+
+        let mut buf = [0; 1500];
+        let len = unwrap!(
+            host.broadcast(services, &mut buf, 60),
+            "Broadcast should succeed"
+        );
+
+        assert!(len > 0, "Broadcast should produce non-empty packet");
+
+        // Parse the broadcast message and verify it contains TXT records
+        let message = unwrap!(
+            Message::from_octets(&buf[..len]),
+            "Should be able to parse broadcast message"
+        );
+
+        // Check that we have answer records
+        assert!(
+            message.header_counts().ancount() > 0,
+            "Broadcast should have answer records"
+        );
+
+        // Look for TXT records in the answer section
+        let mut found_txt = false;
+        let mut has_discriminator = false;
+        
+        for answer in message.answer().unwrap() {
+            let answer = unwrap!(answer, "Should be able to parse answer");
+            if answer.rtype() == Rtype::TXT {
+                found_txt = true;
+
+                // Verify the TXT record contains our expected data
+                let record = unwrap!(
+                    answer.to_any_record::<AllRecordData<_, _>>(),
+                    "Should convert to any record"
+                );
+                if let AllRecordData::Txt(txt) = record.data() {
+                    // Check for discriminator in TXT records
+                    for txt_data in txt.iter() {
+                        if let Ok(s) = core::str::from_utf8(txt_data) {
+                            if s.starts_with("D=") {
+                                has_discriminator = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            found_txt,
+            "Broadcast should include TXT records with commissioning data"
+        );
+        
+        assert!(
+            has_discriminator,
+            "TXT record should contain discriminator (D=)"
+        );
+    }
+
     struct TestRun<'a> {
         host: Host<'a>,
         services: &'a [Service<'a>],
