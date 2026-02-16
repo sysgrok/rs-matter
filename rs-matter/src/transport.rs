@@ -874,15 +874,17 @@ impl TransportMgr {
 
         let payload_end = packet.buf.len();
 
-        debug!(
-            "\n<<SND {}\n      => {}",
-            Packet::<0>::display(&packet.peer, &packet.header),
-            if packet.tx_info.retransmission {
-                "Re-sending"
-            } else {
-                "Sending"
-            }
-        );
+        if packet.tx_info.retransmission {
+            warn!(
+                "\n<<SND Re-sending\n      => {}",
+                Packet::<0>::display(&packet.peer, &packet.header),
+            );
+        } else {
+            debug!(
+                "\n<<SND Sending\n      => {}",
+                Packet::<0>::display(&packet.peer, &packet.header),
+            );
+        }
 
         #[cfg(feature = "debug-tlv-payload")]
         debug!(
