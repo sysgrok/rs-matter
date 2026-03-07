@@ -410,19 +410,16 @@ fn decrypt_in_place<C: Crypto>(
     peer_nodeid: u64,
     parsebuf: &mut ParseBuf<'_>,
 ) -> Result<(), Error> {
-    // TODO: Get rid of the temporary buffers
-
     // AAD:
-    //    the unencrypted header of this packet
-    let mut aad = [0; 8];
+    //    the unencrypted header of this packet (variable length)
     let parsed_slice = parsebuf.parsed_as_slice();
-    if parsed_slice.len() == aad.len() {
-        // The plain_header is variable sized in length, I wonder if the AAD is fixed at 8, or the variable size.
-        // If so, we need to handle it cleanly here.
-        aad.copy_from_slice(parsed_slice);
-    } else {
+    let mut aad = [0; 24];
+    let aad_len = parsed_slice.len();
+
+    if aad_len > aad.len() {
         Err(ErrorCode::InvalidAAD)?;
     }
+    aad[..aad_len].copy_from_slice(parsed_slice);
 
     // IV:
     //   the specific way for creating IV is in get_iv
@@ -437,7 +434,7 @@ fn decrypt_in_place<C: Crypto>(
 
     let mut cypher = crypto.aead()?;
 
-    cypher.decrypt_in_place(key, iv.reference(), &aad, cipher_text)?;
+    cypher.decrypt_in_place(key, iv.reference(), &aad[..aad_len], cipher_text)?;
     // println!("Plain Text: {:x?}", cipher_text);
     parsebuf.tail(crypto::AEAD_TAG_LEN)?;
 

@@ -96,16 +96,25 @@ impl<'a, C: Crypto> Case<'a, C> {
     /// # Arguments
     /// - `exchange` - The exchange to handle the CASE protocol on
     pub async fn handle(&mut self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
+        debug!("CASE: Starting session establishment");
+
         let session = ReservedSession::reserve(exchange.matter(), self.crypto).await?;
 
+        debug!("CASE: Processing Sigma1");
         self.handle_casesigma1(exchange).await?;
+        debug!("CASE: Sigma1 processed, Sigma2 sent");
 
+        debug!("CASE: Waiting for Sigma3");
         exchange.recv_fetch().await?;
 
+        debug!("CASE: Processing Sigma3");
         self.handle_casesigma3(exchange, session).await?;
+        debug!("CASE: Sigma3 processed, sending ACK");
 
         exchange.acknowledge().await?;
         exchange.matter().notify_persist();
+
+        debug!("CASE: Session establishment complete");
 
         Ok(())
     }
@@ -278,6 +287,8 @@ impl<'a, C: Crypto> Case<'a, C> {
                     error!("Sigma3 Signature doesn't match: {}", e);
                     SCStatusCodes::InvalidParameter
                 } else {
+                    debug!("CASE: Sigma3 certs and signature validated");
+
                     // Only now do we add this message to the TT Hash
                     let mut peer_catids: NocCatIds = Default::default();
                     initiator_noc.get_cat_ids(&mut peer_catids)?;
@@ -291,7 +302,10 @@ impl<'a, C: Crypto> Case<'a, C> {
                         session_keys,
                     )?;
 
+                    debug!("CASE: Session keys derived");
+
                     let peer_addr = exchange.with_session(|sess| Ok(sess.get_peer_addr()))?;
+                    let peer_nodeid = initiator_noc.get_node_id()?;
 
                     let (dec_key, remaining) = session_keys
                         .reference()
@@ -301,7 +315,7 @@ impl<'a, C: Crypto> Case<'a, C> {
 
                     session.update(
                         fabric.node_id(),
-                        initiator_noc.get_node_id()?,
+                        peer_nodeid,
                         self.casep.peer_sessid(),
                         self.casep.local_sessid(),
                         peer_addr,
@@ -315,6 +329,9 @@ impl<'a, C: Crypto> Case<'a, C> {
                         Some(att_challenge),
                     )?;
 
+                    debug!("CASE: Session updated (local_sessid={}, peer_sessid={}, peer_nodeid={:#x}, peer_addr={})",
+                        self.casep.local_sessid(), self.casep.peer_sessid(), peer_nodeid, peer_addr);
+
                     // Complete the reserved session and thus make the `Session` instance
                     // immediately available for use by the system.
                     //
@@ -323,6 +340,8 @@ impl<'a, C: Crypto> Case<'a, C> {
                     // as it might start using it right after it receives the response, while it is still marked
                     // as reserved.
                     session.complete();
+
+                    debug!("CASE: Session activated");
 
                     SCStatusCodes::SessionEstablishmentSuccess
                 }
