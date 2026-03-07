@@ -19,7 +19,7 @@ use core::fmt;
 
 use crate::error::Error;
 use crate::im::{AttrPath, DataVersionFilter, EventFilter, EventPath};
-use crate::tlv::{FromTLV, TLVArray, TLVElement, TagType, ToTLV};
+use crate::tlv::{FromTLV, TLVArray, TLVElement, TLVTag, TLVWrite, ToTLV};
 use crate::utils::storage::WriteBuf;
 
 /// A request to subscribe to attributes and events from a Matter device.
@@ -143,8 +143,12 @@ impl SubscribeResp {
         subscription_id: u32,
         max_int: u16,
     ) -> Result<&'a [u8], Error> {
-        let resp = Self::new(subscription_id, max_int);
-        resp.to_tlv(&TagType::Anonymous, &mut *wb)?;
+        wb.start_struct(&TLVTag::Anonymous)?;
+        wb.u32(&TLVTag::Context(0), subscription_id)?;
+        wb.u16(&TLVTag::Context(2), max_int)?;
+        // InteractionModelRevision (tag 0xFF) - required by Matter spec
+        wb.u8(&TLVTag::Context(0xFF), 11)?;
+        wb.end_container()?;
 
         Ok(wb.as_slice())
     }
