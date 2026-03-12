@@ -174,7 +174,8 @@ where
         // TODO: Handle the cases where we receive a timeout request
         // before read and subscribe. This is probably not allowed.
 
-        match meta.opcode::<OpCode>()? {
+        let opcode = meta.opcode::<OpCode>()?;
+        match opcode {
             OpCode::ReadRequest => self.read(exchange).await?,
             OpCode::WriteRequest => self.write(exchange, timeout_instant).await?,
             OpCode::InvokeRequest => self.invoke(exchange, timeout_instant).await?,
@@ -1186,6 +1187,9 @@ where
             }
         };
 
+        // InteractionModelRevision (tag 0xFF) - required by Matter spec
+        wb.u8(&TLVTag::Context(0xFF), 11)?;
+
         wb.end_container()?;
 
         Ok(())
@@ -1267,6 +1271,10 @@ where
         }
 
         wb.end_container()?;
+
+        // InteractionModelRevision (tag 0xFF) - required by Matter spec
+        wb.u8(&TLVTag::Context(0xFF), 11)?;
+
         wb.end_container()?;
 
         self.invoker
@@ -1342,6 +1350,9 @@ where
         if has_requests {
             wb.end_container()?;
         }
+
+        // InteractionModelRevision (tag 0xFF) - required by Matter spec
+        wb.u8(&TLVTag::Context(0xFF), 11)?;
 
         wb.end_container()?;
 
