@@ -37,7 +37,7 @@ use crate::dm::clusters::wifi_diag::{SecurityTypeEnum, WiFiVersionEnum, WifiDiag
 use crate::dm::networks::NetChangeNotif;
 use crate::error::{Error, ErrorCode};
 use crate::tlv::Nullable;
-use crate::utils::sync::{blocking, IfMutex};
+use crate::utils::sync::{blocking, DynBase, IfMutex};
 use crate::utils::zbus_proxies::wpa_supp::bss::BSSProxy;
 use crate::utils::zbus_proxies::wpa_supp::interface::InterfaceProxy;
 use crate::utils::zbus_proxies::wpa_supp::wpa_supplicant::WPASupplicantProxy;
@@ -431,6 +431,12 @@ where
         }))
     }
 }
+
+#[cfg(feature = "sync-mutex")]
+impl<T> DynBase for WpaSuppCtl<'_, T> where T: IpStackCtl + Send {}
+
+#[cfg(not(feature = "sync-mutex"))]
+impl<T> DynBase for WpaSuppCtl<'_, T> where T: IpStackCtl {}
 
 impl<T> WifiDiag for WpaSuppCtl<'_, T>
 where
