@@ -650,7 +650,7 @@ impl<'a, H: LevelControlHooks, OH: OnOffHooks> LevelControlHandler<'a, H, OH> {
         )
         .await?;
 
-        if on {
+        if !on {
             self.with_state(|state| {
                 if state.on_level.is_none() {
                     self.hooks.set_current_level(temp_current_level);

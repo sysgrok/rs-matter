@@ -571,10 +571,11 @@ impl<'a, H: OnOffHooks, LH: LevelControlHooks> OnOffHandler<'a, H, LH> {
                             // the OnTime attribute reaches 0, the server SHALL set the OffWaitTime and OnOff attributes to 0
                             // and FALSE, respectively.
                             OnOffCommand::On | OnOffCommand::OnWithTimedOff => {
-                                if state.off_wait_time > 0 {
-                                    state.off_wait_time = 0;
+                                if state.on_time > 0 {
+                                    state.on_time -= 1;
                                     Outcome::Delay
                                 } else {
+                                    state.off_wait_time = 0;
                                     if self.set_off(state, false, &ctx) {
                                         state.state = OnOffClusterState::Off;
                                     }
