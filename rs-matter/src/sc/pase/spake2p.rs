@@ -242,7 +242,7 @@ impl Spake2P {
         context.finish(&mut self.context_hash)
     }
 
-    pub fn setup_verifier<C: Crypto>(
+    pub async fn setup_verifier<C: Crypto>(
         &mut self,
         crypto: C,
         verifier: &Spake2pVerifierData,
@@ -280,10 +280,14 @@ impl Spake2P {
             (crypto.ec_scalar(w0)?, crypto.ec_point(l_pt)?)
         };
 
+        embassy_futures::yield_now().await;
+
         let n_pt = crypto.ec_point(Self::MATTER_N_BIN)?;
         let (b_pt, xy) = Self::compute_b_pt_xy(&crypto, &n_pt, &w0)?;
 
         b_pt.write_canon(b_pt_out)?;
+
+        embassy_futures::yield_now().await;
 
         let mut tt_hash = HASH_ZEROED;
         Self::compute_verifier_tt_hash(
@@ -297,6 +301,8 @@ impl Spake2P {
             &xy,
             &mut tt_hash,
         )?;
+
+        embassy_futures::yield_now().await;
 
         Self::compute_ke_ca_cb(
             &crypto,
@@ -944,13 +950,13 @@ mod tests {
 
         let mut b_pt = CanonEcPoint::new();
         let mut cb_from_verifier = HmacHash::new();
-        unwrap!(verifier.setup_verifier(
+        unwrap!(embassy_futures::block_on(verifier.setup_verifier(
             test_only_crypto(),
             &verifier_data,
             a_pt.reference(),
             &mut b_pt,
             &mut cb_from_verifier
-        ));
+        )));
 
         // === PROVER SIDE (continued) ===
         // Step 3: Prover receives Y and cB, computes cA
@@ -1032,13 +1038,13 @@ mod tests {
 
         let mut b_pt = CanonEcPoint::new();
         let mut cb_from_verifier = HmacHash::new();
-        unwrap!(verifier.setup_verifier(
+        unwrap!(embassy_futures::block_on(verifier.setup_verifier(
             test_only_crypto(),
             &verifier_data,
             a_pt.reference(),
             &mut b_pt,
             &mut cb_from_verifier
-        ));
+        )));
 
         // Prover should fail to verify cB (wrong password means different cB)
         let mut ca_from_prover = HmacHash::new();

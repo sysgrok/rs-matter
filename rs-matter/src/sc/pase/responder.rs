@@ -23,7 +23,7 @@
 use rand_core::RngCore;
 
 use crate::crypto::{
-    CanonEcPointRef, Crypto, HmacHashRef, Kdf, AEAD_CANON_KEY_LEN, EC_POINT_ZEROED,
+    CanonEcPoint, CanonEcPointRef, Crypto, HmacHashRef, Kdf, AEAD_CANON_KEY_LEN, EC_POINT_ZEROED,
     HMAC_HASH_ZEROED,
 };
 use crate::dm::ChangeNotify;
@@ -194,9 +194,21 @@ impl<'a, C: Crypto> PaseResponder<'a, C> {
     async fn handle_pasepake1(&mut self, exchange: &mut Exchange<'_>) -> Result<(), Error> {
         check_opcode(exchange, OpCode::PASEPake1)?;
 
-        let req = get_root_node_struct(exchange.rx()?.payload())?;
-        let pake1 = Pake1::from_tlv(&req)?;
-        let a_pt: CanonEcPointRef<'_> = pake1.pa.0.try_into()?;
+        // Copy the EC point out of the RX buffer into an owned local variable,
+        // so we can release the RX buffer before the heavy SPAKE2+ crypto.
+        // This is critical on resource-constrained devices (e.g. ESP32-C6) where
+        // holding the RX buffer during long synchronous crypto operations starves
+        // the cooperative executor, preventing WiFi/BLE packet processing.
+        let a_pt_owned: CanonEcPoint = {
+            let req = get_root_node_struct(exchange.rx()?.payload())?;
+            let pake1 = Pake1::from_tlv(&req)?;
+            let a_pt: CanonEcPointRef<'_> = pake1.pa.0.try_into()?;
+            CanonEcPoint::from(a_pt)
+        };
+
+        // Release the RX buffer so the transport layer can receive new packets
+        // while we perform the expensive SPAKE2+ computation below.
+        exchange.rx_done()?;
 
         let mut b_pt = EC_POINT_ZEROED;
         let mut cb = HMAC_HASH_ZEROED;
@@ -205,22 +217,31 @@ impl<'a, C: Crypto> PaseResponder<'a, C> {
         let notify_change =
             |endpt_id, cluster_id, attr_id| self.notify.notify(endpt_id, cluster_id, attr_id);
 
-        let has_comm_window = {
+        // Clone the verifier data out of the state so we can call
+        // setup_verifier (which is async) outside the synchronous with_state closure.
+        let verifier_data = {
             exchange.with_state(|state| {
                 if let Some(comm_window) = state.pase.comm_window(notify_mdns, notify_change)? {
-                    self.spake2p.setup_verifier(
-                        &self.crypto,
-                        &comm_window.verifier,
-                        a_pt,
-                        &mut b_pt,
-                        &mut cb,
-                    )?;
-
-                    Ok(true)
+                    Ok(Some(comm_window.verifier.clone()))
                 } else {
-                    Ok(false)
+                    Ok(None)
                 }
             })?
+        };
+
+        let has_comm_window = if let Some(verifier_data) = &verifier_data {
+            self.spake2p
+                .setup_verifier(
+                    &self.crypto,
+                    verifier_data,
+                    a_pt_owned.reference(),
+                    &mut b_pt,
+                    &mut cb,
+                )
+                .await?;
+            true
+        } else {
+            false
         };
 
         if has_comm_window {
