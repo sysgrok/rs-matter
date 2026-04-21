@@ -46,7 +46,7 @@ use crate::utils::sync::blocking::Mutex;
 use crate::Matter;
 
 use events::Events;
-use subscriptions::Subscriptions;
+use subscriptions::{AttrChangeFilter, ReportContext, SubAttrChangeFilter, Subscriptions};
 
 pub use types::*;
 
@@ -68,11 +68,7 @@ const MAX_WRITE_ATTRS_IN_ONE_TRANS: usize = 15;
 pub type IMBuffer = heapless::Vec<u8, MAX_EXCHANGE_RX_BUF_SIZE>;
 
 struct SubscriptionBuffer<B> {
-    fabric_idx: NonZeroU8,
-    peer_node_id: u64,
     subscription_id: u32,
-    // Tracks how far along into the event stream this subscription has seen, updated as we emit events
-    min_event_number: u64,
     buffer: B,
 }
 
@@ -292,6 +288,7 @@ where
             HandlerInvoker::new(exchange, self),
             EventReader::new(&mut min_event_number),
             self.events,
+            None,
         );
 
         resp.respond(&mut wb, true).await?;
@@ -408,12 +405,14 @@ where
         })?;
 
         if !req.keep_subs()? {
+            let buffers = &self.subscriptions_buffers;
             self.subscriptions
-                .remove(Some(fabric_idx), Some(peer_node_id), None);
-            self.subscriptions_buffers.lock(|sb| {
-                sb.borrow_mut()
-                    .retain(|sb| sb.fabric_idx != fabric_idx || sb.peer_node_id != peer_node_id)
-            });
+                .remove(Some(fabric_idx), Some(peer_node_id), None, |removed_id| {
+                    buffers.lock(|sb| {
+                        sb.borrow_mut()
+                            .retain(|sb| sb.subscription_id != removed_id)
+                    });
+                });
 
             debug!(
                 "All subscriptions for [F:{:x},P:{:x}] removed",
@@ -438,11 +437,17 @@ where
 
         let _guard = scopeguard::guard((), |_| {
             if !subscribed.lock(|s| s.get()) {
-                self.subscriptions.remove(None, None, Some(id));
+                self.subscriptions.remove(None, None, Some(id), |_| {});
             }
         });
 
         let mut min_event_number = 0;
+
+        // Priming snapshot: no filtering is applied to the initial report.
+        let Some(ctx) = self.subscriptions.begin_report(id, true) else {
+            // The subscription was removed concurrently; nothing to do.
+            return Ok(());
+        };
 
         let primed = self
             .report_data(
@@ -454,6 +459,7 @@ where
                 &mut tx,
                 exchange,
                 true,
+                None,
             )
             .await?;
 
@@ -470,13 +476,13 @@ where
                 fabric_idx, peer_node_id, id
             );
 
-            if self.subscriptions.mark_reported(id) {
+            if self
+                .subscriptions
+                .mark_reported(id, ctx.watermark(), min_event_number)
+            {
                 let _ = self.subscriptions_buffers.lock(|sb| {
                     sb.borrow_mut().push(SubscriptionBuffer {
-                        fabric_idx,
-                        peer_node_id,
                         subscription_id: id,
-                        min_event_number,
                         buffer: rx,
                     })
                 });
@@ -555,7 +561,7 @@ where
                     matter.with_state(|state| state.sessions.get(session_id).is_none())
                 })
             {
-                self.subscriptions.remove(None, None, Some(id));
+                self.subscriptions.remove(None, None, Some(id), |_| {});
                 self.subscriptions_buffers.lock(|sb| {
                     sb.borrow_mut().retain(|sb| sb.subscription_id != id);
                 });
@@ -573,7 +579,7 @@ where
 
             while let Some((fabric_idx, peer_node_id, _, id)) = self.subscriptions.find_expired(now)
             {
-                self.subscriptions.remove(None, None, Some(id));
+                self.subscriptions.remove(None, None, Some(id), |_| {});
                 self.subscriptions_buffers.lock(|sb| {
                     sb.borrow_mut().retain(|sb| sb.subscription_id != id);
                 });
@@ -585,18 +591,31 @@ where
             }
 
             loop {
-                let sub = self.subscriptions.find_report_due(now);
+                let sub = self.subscriptions.find_report_due(now, |min_event_number| {
+                    self.events_pending_for(min_event_number)
+                });
 
-                if let Some((_, _, session_id, id)) = sub {
+                if let Some((fabric_idx, peer_node_id, session_id, id)) = sub {
                     let subscribed = Mutex::<_, MatterRawMutex>::new(Cell::new(false));
 
                     let _guard = scopeguard::guard((), |_| {
                         if !subscribed.lock(|s| s.get()) {
-                            self.subscriptions.remove(None, None, Some(id));
+                            self.subscriptions.remove(None, None, Some(id), |_| {});
                         }
                     });
 
-                    // TODO: Do a more sophisticated check whether something had actually changed w.r.t. this subscription
+                    // Open the report context for this subscription. This is a small
+                    // scalar value that captures the `since` watermark and the watermark
+                    // to commit on success. The actual changed-attrs table is NOT copied;
+                    // the per-attribute filter consults the live table behind the mutex.
+                    let Some(ctx) = self.subscriptions.begin_report(id, false) else {
+                        // The subscription was removed concurrently; drop its buffer too.
+                        self.subscriptions_buffers.lock(|sb| {
+                            sb.borrow_mut().retain(|sb| sb.subscription_id != id);
+                        });
+                        continue;
+                    };
+
                     let mut sub = self.subscriptions_buffers.lock(|sb| {
                         let mut sb = sb.borrow_mut();
 
@@ -605,13 +624,46 @@ where
                         sb.remove(index)
                     });
 
+                    // Pre-filter: if nothing actually changed for this subscription and
+                    // there are no new events to report, skip the whole exchange. The
+                    // subscription's `reported_at` was already advanced by
+                    // `find_report_due`, so the max-interval liveness timer stays armed.
+                    if !ctx.any_pending() && !self.events_pending_for(ctx.min_event_number()) {
+                        if self.subscriptions.mark_reported(
+                            id,
+                            ctx.watermark(),
+                            ctx.min_event_number(),
+                        ) {
+                            self.subscriptions_buffers.lock(|sb| {
+                                let _ = sb.borrow_mut().push(sub);
+                                subscribed.lock(|s| s.set(true));
+                            });
+                        }
+                        continue;
+                    }
+
+                    let mut min_event_number = ctx.min_event_number();
                     let result = self
-                        .process_subscription(matter, session_id, &mut sub)
+                        .process_subscription(
+                            matter,
+                            fabric_idx,
+                            peer_node_id,
+                            session_id,
+                            &mut sub,
+                            &mut min_event_number,
+                            &ctx,
+                        )
                         .await;
 
                     match result {
                         Ok(primed) => {
-                            if primed && self.subscriptions.mark_reported(id) {
+                            if primed
+                                && self.subscriptions.mark_reported(
+                                    id,
+                                    ctx.watermark(),
+                                    min_event_number,
+                                )
+                            {
                                 self.subscriptions_buffers.lock(|sb| {
                                     let _ = sb.borrow_mut().push(sub);
 
@@ -627,7 +679,27 @@ where
                     break;
                 }
             }
+
+            // Periodically trim changed-attr entries that have been reported by every
+            // subscription, so the table does not accumulate stale promoted wildcards.
+            self.subscriptions.purge_reported_changes();
         }
+    }
+
+    /// Returns `true` if there is at least one event in the buffers with
+    /// `event_number >= min_event_number`, i.e. events the caller has not seen yet.
+    ///
+    /// Used as a coarse-grained "are there any events pending for this subscription?"
+    /// check to avoid emitting empty subscription reports.
+    fn events_pending_for(&self, min_event_number: u64) -> bool {
+        self.events.fetch(|events| {
+            for event in events {
+                if event.event_number >= min_event_number {
+                    return true;
+                }
+            }
+            false
+        })
     }
 
     /// Process one valid subscription, reporting the data to the peer.
@@ -638,11 +710,19 @@ where
     /// - `peer_node_id` - the node ID of the peer
     /// - `session_id` - the session ID of the peer, if any
     /// - `sub` - the received and saved data for the subscription, when the subscription was primed
+    /// - `min_event_number` - the subscription's current event watermark; updated
+    ///   in place as events are emitted so the caller can persist it
+    /// - `ctx` - the report context for this subscription
+    #[allow(clippy::too_many_arguments)]
     async fn process_subscription(
         &self,
         matter: &Matter<'_>,
+        fabric_idx: NonZeroU8,
+        peer_node_id: u64,
         session_id: Option<u32>,
         sub: &mut SubscriptionBuffer<B::Buffer<'_>>,
+        min_event_number: &mut u64,
+        ctx: &ReportContext,
     ) -> Result<bool, Error> {
         let mut exchange = if let Some(session_id) = session_id {
             Exchange::initiate_for_session(matter, session_id)?
@@ -657,16 +737,23 @@ where
             // Always safe as `IMBuffer` is defined to be `MAX_EXCHANGE_RX_BUF_SIZE`, which is bigger than `MAX_EXCHANGE_TX_BUF_SIZE`
             unwrap!(tx.resize_default(MAX_EXCHANGE_TX_BUF_SIZE));
 
+            // Build a filter that consults the live changed-attrs table via the
+            // subscriptions mutex, lock-per-attribute. No snapshot is materialized.
+            let filter = ctx
+                .filter_active()
+                .then(|| SubAttrChangeFilter::new(self.subscriptions, ctx.since()));
+
             let primed = self
                 .report_data(
                     sub.subscription_id,
-                    sub.fabric_idx.get(),
-                    sub.peer_node_id,
-                    &mut sub.min_event_number,
+                    fabric_idx.get(),
+                    peer_node_id,
+                    min_event_number,
                     &sub.buffer,
                     &mut tx,
                     &mut exchange,
                     false,
+                    filter.as_ref().map(|f| f as &dyn AttrChangeFilter),
                 )
                 .await?;
 
@@ -676,7 +763,7 @@ where
         } else {
             error!(
                 "No TX buffer available for processing subscription [F:{:x},P:{:x}]::{}",
-                sub.fabric_idx, sub.peer_node_id, sub.subscription_id,
+                fabric_idx, peer_node_id, sub.subscription_id,
             );
 
             Ok(false)
@@ -746,6 +833,7 @@ where
         tx: &mut [u8],
         exchange: &mut Exchange<'_>,
         with_dataver: bool,
+        filter: Option<&dyn AttrChangeFilter>,
     ) -> Result<bool, Error>
     where
         T: DataModelHandler,
@@ -769,6 +857,7 @@ where
             HandlerInvoker::new(exchange, self),
             EventReader::new(min_event_number),
             self.events,
+            filter,
         );
 
         let sub_valid = resp.respond(&mut wb, false).await?;
@@ -992,6 +1081,12 @@ struct ReportDataResponder<'a, 'b, 'c, const NE: usize, C> {
     invoker: HandlerInvoker<'b, 'c, C>,
     event_reader: EventReader<'a>,
     events: &'a Events<NE>,
+    /// Optional per-attribute filter consulted while emitting a subscription update.
+    ///
+    /// - `None`: unconditional report (IM read or priming report) — emit everything.
+    /// - `Some(_)`: incremental subscription update — only emit attributes accepted
+    ///   by the filter.
+    attr_filter: Option<&'a dyn AttrChangeFilter>,
 }
 
 impl<'a, 'b, 'c, const NE: usize, C> ReportDataResponder<'a, 'b, 'c, NE, C>
@@ -1010,6 +1105,7 @@ where
         invoker: HandlerInvoker<'b, 'c, C>,
         event_reader: EventReader<'a>,
         events: &'a Events<NE>,
+        attr_filter: Option<&'a dyn AttrChangeFilter>,
     ) -> Self {
         Self {
             req,
@@ -1018,6 +1114,7 @@ where
             invoker,
             event_reader,
             events,
+            attr_filter,
         }
     }
 
@@ -1056,6 +1153,13 @@ where
 
             for item in self.node.read(self.req, &accessor)? {
                 let item = item?;
+
+                // Skip attributes the subscriber has already seen (not in the changed set).
+                if let (Some(filter), Ok(attr)) = (self.attr_filter, item.as_ref()) {
+                    if !filter.includes(attr.endpoint_id, attr.cluster_id, attr.attr_id) {
+                        continue;
+                    }
+                }
 
                 loop {
                     let result = self.invoker.process_read(&item, &mut *wb).await;
