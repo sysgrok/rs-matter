@@ -15,7 +15,6 @@
  *    limitations under the License.
  */
 
-use core::cell::{Cell, RefCell};
 use core::future::Future;
 use core::num::NonZeroU8;
 use core::pin::pin;
@@ -28,6 +27,7 @@ use crate::acl::Accessor;
 use crate::crypto::Crypto;
 use crate::dm::clusters::net_comm::NetworksAccess;
 use crate::dm::events::EventTLVWrite;
+use crate::dm::subscriptions::SubscriptionsBuffers;
 use crate::error::{Error, ErrorCode};
 use crate::im::{
     EventPriority, EventResp, EventStatus, IMStatusCode, InvReq, InvRespTag, OpCode, ReadReq,
@@ -40,13 +40,11 @@ use crate::tlv::{get_root_node_struct, FromTLV, Nullable, TLVElement, TLVTag, TL
 use crate::transport::exchange::{Exchange, MAX_EXCHANGE_RX_BUF_SIZE, MAX_EXCHANGE_TX_BUF_SIZE};
 use crate::utils::select::Coalesce;
 use crate::utils::storage::pooled::BufferAccess;
-use crate::utils::storage::{Vec, WriteBuf};
-use crate::utils::sync::blocking::raw::MatterRawMutex;
-use crate::utils::sync::blocking::Mutex;
+use crate::utils::storage::WriteBuf;
 use crate::Matter;
 
 use events::Events;
-use subscriptions::{AttrChangeFilter, ReportContext, SubAttrChangeFilter, Subscriptions};
+use subscriptions::{ReportContext, Subscriptions};
 
 pub use types::*;
 
@@ -67,11 +65,6 @@ const MAX_WRITE_ATTRS_IN_ONE_TRANS: usize = 15;
 
 pub type IMBuffer = heapless::Vec<u8, MAX_EXCHANGE_RX_BUF_SIZE>;
 
-struct SubscriptionBuffer<B> {
-    subscription_id: u32,
-    buffer: B,
-}
-
 /// An `ExchangeHandler` implementation capable of handling responder exchanges for the Interaction Model protocol.
 /// The implementation needs a `DataModelHandler` instance to interact with the underlying clusters of the data model.
 pub struct DataModel<'a, const NS: usize, const NE: usize, C, B, T, S, N>
@@ -83,7 +76,7 @@ where
     buffers: &'a B,
     kv: S,
     subscriptions: &'a Subscriptions<NS>,
-    subscriptions_buffers: Mutex<RefCell<Vec<SubscriptionBuffer<B::Buffer<'a>>, NS>>>,
+    subscriptions_buffers: SubscriptionsBuffers<'a, B, NS>,
     events: &'a Events<NE>,
     networks: N,
     handler: T,
@@ -112,7 +105,7 @@ where
     /// - `networks` - an instance of type `N` which implements the `NetworksAccess` trait. This instance is used for interacting with the network management cluster.
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
-    pub const fn new(
+    pub fn new(
         matter: &'a Matter<'a>,
         crypto: C,
         buffers: &'a B,
@@ -122,12 +115,14 @@ where
         kv: S,
         networks: N,
     ) -> Self {
+        subscriptions.clear();
+
         Self {
             matter,
             crypto,
             buffers,
             subscriptions,
-            subscriptions_buffers: Mutex::new(RefCell::new(Vec::new())),
+            subscriptions_buffers: SubscriptionsBuffers::new(),
             events,
             handler,
             kv,
@@ -175,9 +170,9 @@ where
 
     fn timeout_checks(&self) -> Result<(), Error> {
         let mut notify_mdns = || self.matter.notify_mdns_changed();
-        let mut notify_change = |endpt_id, clust_id, attr_id| {
+        let mut notify_change = |endpt_id, clust_id| {
             self.change_notify()
-                .notify_attr_changed(endpt_id, clust_id, attr_id)
+                .notify_cluster_changed(endpt_id, clust_id)
         };
 
         self.matter.with_state(|state| {
@@ -279,19 +274,16 @@ where
         let metadata = self.handler.lock().await;
         let node = metadata.node();
 
-        let mut min_event_number = 0;
-
         let mut resp = ReportDataResponder::new(
             &req,
             &node,
             None,
             HandlerInvoker::new(exchange, self),
-            EventReader::new(&mut min_event_number),
+            EventReader::new(0),
             self.events,
-            None,
         );
 
-        resp.respond(&mut wb, true).await?;
+        resp.respond(&mut wb, true, true, |_, _, _| true).await?;
 
         Ok(())
     }
@@ -394,101 +386,55 @@ where
             return Self::send_status(exchange, err.code().into()).await;
         }
 
-        let (fabric_idx, peer_node_id) = exchange.with_state(|state| {
+        let (fab_idx, peer_node_id) = exchange.with_state(|state| {
             let sess = exchange.id().session(&mut state.sessions);
 
-            let fabric_idx =
-                NonZeroU8::new(sess.get_local_fabric_idx()).ok_or(ErrorCode::Invalid)?;
+            let fab_idx = NonZeroU8::new(sess.get_local_fabric_idx()).ok_or(ErrorCode::Invalid)?;
             let peer_node_id = sess.get_peer_node_id().ok_or(ErrorCode::Invalid)?;
 
-            Ok((fabric_idx, peer_node_id))
+            Ok((fab_idx, peer_node_id))
         })?;
 
         if !req.keep_subs()? {
-            let buffers = &self.subscriptions_buffers;
             self.subscriptions
-                .remove(Some(fabric_idx), Some(peer_node_id), None, |removed_id| {
-                    buffers.lock(|sb| {
-                        sb.borrow_mut()
-                            .retain(|sb| sb.subscription_id != removed_id)
-                    });
+                .remove(&self.subscriptions_buffers, |sub| {
+                    (sub.ids().fab_idx == fab_idx && sub.ids().peer_node_id == peer_node_id)
+                        .then_some("new subscription request")
                 });
-
-            debug!(
-                "All subscriptions for [F:{:x},P:{:x}] removed",
-                fabric_idx, peer_node_id
-            );
         }
 
         let max_int_secs = core::cmp::max(req.max_int_ceil()?, 40); // Say we need at least 4 secs for potential latencies
         let min_int_secs = req.min_int_floor()?;
 
-        let Some(id) = self.subscriptions.add(
-            fabric_idx,
+        let now = Instant::now();
+
+        let Some(mut rctx) = self.subscriptions.add(
+            now,
+            fab_idx,
             peer_node_id,
             exchange.id().session_id(),
             min_int_secs,
             max_int_secs,
+            self.events.watermark(),
+            rx,
+            &self.subscriptions_buffers,
         ) else {
             return Self::send_status(exchange, IMStatusCode::ResourceExhausted).await;
         };
 
-        let subscribed = Mutex::<_, MatterRawMutex>::new(Cell::new(false));
-
-        let _guard = scopeguard::guard((), |_| {
-            if !subscribed.lock(|s| s.get()) {
-                self.subscriptions.remove(None, None, Some(id), |_| {});
-            }
-        });
-
-        let mut min_event_number = 0;
-
-        // Priming snapshot: no filtering is applied to the initial report.
-        let Some(ctx) = self.subscriptions.begin_report(id, true) else {
-            // The subscription was removed concurrently; nothing to do.
-            return Ok(());
-        };
-
-        let primed = self
-            .report_data(
-                id,
-                fabric_idx.get(),
-                peer_node_id,
-                &mut min_event_number,
-                &rx,
-                &mut tx,
-                exchange,
-                true,
-                None,
-            )
-            .await?;
+        let primed = self.report_data(&mut rctx, &mut tx, exchange, true).await?;
 
         if primed {
             exchange
                 .send_with(|_, wb| {
-                    SubscribeResp::write(wb, id, max_int_secs)?;
+                    SubscribeResp::write(wb, rctx.subscription().ids().id, max_int_secs)?;
                     Ok(Some(OpCode::SubscribeResponse.into()))
                 })
                 .await?;
 
-            debug!(
-                "Subscription [F:{:x},P:{:x}]::{} created",
-                fabric_idx, peer_node_id, id
-            );
+            rctx.set_keep();
 
-            if self
-                .subscriptions
-                .mark_reported(id, ctx.watermark(), min_event_number)
-            {
-                let _ = self.subscriptions_buffers.lock(|sb| {
-                    sb.borrow_mut().push(SubscriptionBuffer {
-                        subscription_id: id,
-                        buffer: rx,
-                    })
-                });
-
-                subscribed.lock(|s| s.set(true));
-            }
+            info!("Subscription {:?} primed", rctx.subscription().ids());
         }
 
         Ok(())
@@ -556,127 +502,66 @@ where
 
             select3(&mut notification, &mut timeout, &mut session_removed).await;
 
-            while let Some((fabric_idx, peer_node_id, session_id, id)) =
-                self.subscriptions.find_removed_session(|session_id| {
-                    matter.with_state(|state| state.sessions.get(session_id).is_none())
-                })
-            {
-                self.subscriptions.remove(None, None, Some(id), |_| {});
-                self.subscriptions_buffers.lock(|sb| {
-                    sb.borrow_mut().retain(|sb| sb.subscription_id != id);
-                });
-
-                debug!(
-                    "Subscription [F:{:x},P:{:x}]::{} removed since its session ({}) had been removed too",
-                    fabric_idx,
-                    peer_node_id,
-                    id,
-                    session_id
-                );
-            }
-
             let now = Instant::now();
 
-            while let Some((fabric_idx, peer_node_id, _, id)) = self.subscriptions.find_expired(now)
-            {
-                self.subscriptions.remove(None, None, Some(id), |_| {});
-                self.subscriptions_buffers.lock(|sb| {
-                    sb.borrow_mut().retain(|sb| sb.subscription_id != id);
-                });
-
-                warn!(
-                    "Subscription [F:{:x},P:{:x}]::{} removed due to inactivity",
-                    fabric_idx, peer_node_id, id
-                );
-            }
+            // First remove all expired or no-longer valid subscriptions
 
             loop {
-                let sub = self.subscriptions.find_report_due(now, |min_event_number| {
-                    self.events_pending_for(min_event_number)
-                });
-
-                if let Some((fabric_idx, peer_node_id, session_id, id)) = sub {
-                    let subscribed = Mutex::<_, MatterRawMutex>::new(Cell::new(false));
-
-                    let _guard = scopeguard::guard((), |_| {
-                        if !subscribed.lock(|s| s.get()) {
-                            self.subscriptions.remove(None, None, Some(id), |_| {});
+                let removed_any = self
+                    .subscriptions
+                    .remove(&self.subscriptions_buffers, |sub| {
+                        if sub.is_expired(now) {
+                            return Some("expired");
                         }
-                    });
 
-                    // Open the report context for this subscription. This is a small
-                    // scalar value that captures the `since` watermark and the watermark
-                    // to commit on success. The actual changed-attrs table is NOT copied;
-                    // the per-attribute filter consults the live table behind the mutex.
-                    let Some(ctx) = self.subscriptions.begin_report(id, false) else {
-                        // The subscription was removed concurrently; drop its buffer too.
-                        self.subscriptions_buffers.lock(|sb| {
-                            sb.borrow_mut().retain(|sb| sb.subscription_id != id);
-                        });
-                        continue;
-                    };
-
-                    let mut sub = self.subscriptions_buffers.lock(|sb| {
-                        let mut sb = sb.borrow_mut();
-
-                        let index = unwrap!(sb.iter().position(|sb| sb.subscription_id == id));
-
-                        sb.remove(index)
-                    });
-
-                    // Pre-filter: if nothing actually changed for this subscription and
-                    // there are no new events to report, skip the whole exchange. The
-                    // subscription's `reported_at` was already advanced by
-                    // `find_report_due`, so the max-interval liveness timer stays armed.
-                    if !ctx.any_pending() && !self.events_pending_for(ctx.min_event_number()) {
-                        if self.subscriptions.mark_reported(
-                            id,
-                            ctx.watermark(),
-                            ctx.min_event_number(),
-                        ) {
-                            self.subscriptions_buffers.lock(|sb| {
-                                let _ = sb.borrow_mut().push(sub);
-                                subscribed.lock(|s| s.set(true));
-                            });
-                        }
-                        continue;
-                    }
-
-                    let mut min_event_number = ctx.min_event_number();
-                    let result = self
-                        .process_subscription(
-                            matter,
-                            fabric_idx,
-                            peer_node_id,
-                            session_id,
-                            &mut sub,
-                            &mut min_event_number,
-                            &ctx,
-                        )
-                        .await;
-
-                    match result {
-                        Ok(primed) => {
-                            if primed
-                                && self.subscriptions.mark_reported(
-                                    id,
-                                    ctx.watermark(),
-                                    min_event_number,
-                                )
-                            {
-                                self.subscriptions_buffers.lock(|sb| {
-                                    let _ = sb.borrow_mut().push(sub);
-
-                                    subscribed.lock(|s| s.set(true));
-                                });
+                        matter.with_state(|state| {
+                            if state.fabrics.get(sub.ids().fab_idx).is_none() {
+                                return Some("fabric removed");
                             }
-                        }
-                        Err(e) => {
-                            error!("Error while processing subscription: {:?}", e);
-                        }
-                    }
-                } else {
+
+                            // The session the subscription was accepted on was
+                            // torn down (eviction, explicit close, peer-side
+                            // CASE re-handshake, ...). Per Matter spec §8.5.1
+                            // subscriptions are scoped to the session they
+                            // were established on, and the publisher can no
+                            // longer route reports to the subscriber. Drop
+                            // immediately rather than waiting for `max_int`
+                            // to expire and time-out the send.
+                            if state.sessions.get(sub.session_id()).is_none() {
+                                return Some("session removed");
+                            }
+
+                            None
+                        })
+                    });
+
+                if !removed_any {
                     break;
+                }
+            }
+
+            // Now report while there are subscriptions which are due for reporting
+
+            let max_event_number = self.events.watermark();
+
+            loop {
+                let Some(mut rctx) =
+                    self.subscriptions
+                        .report(now, max_event_number, &self.subscriptions_buffers)
+                else {
+                    break;
+                };
+
+                let result = self.process_subscription(matter, &mut rctx).await;
+
+                match result {
+                    Ok(true) => rctx.set_keep(),
+                    Ok(false) => (),
+                    Err(e) => error!(
+                        "Error processing subscription {:?}: {:?}",
+                        rctx.subscription().ids(),
+                        e
+                    ),
                 }
             }
 
@@ -684,22 +569,6 @@ where
             // subscription, so the table does not accumulate stale promoted wildcards.
             self.subscriptions.purge_reported_changes();
         }
-    }
-
-    /// Returns `true` if there is at least one event in the buffers with
-    /// `event_number >= min_event_number`, i.e. events the caller has not seen yet.
-    ///
-    /// Used as a coarse-grained "are there any events pending for this subscription?"
-    /// check to avoid emitting empty subscription reports.
-    fn events_pending_for(&self, min_event_number: u64) -> bool {
-        self.events.fetch(|events| {
-            for event in events {
-                if event.event_number >= min_event_number {
-                    return true;
-                }
-            }
-            false
-        })
     }
 
     /// Process one valid subscription, reporting the data to the peer.
@@ -717,44 +586,17 @@ where
     async fn process_subscription(
         &self,
         matter: &Matter<'_>,
-        fabric_idx: NonZeroU8,
-        peer_node_id: u64,
-        session_id: Option<u32>,
-        sub: &mut SubscriptionBuffer<B::Buffer<'_>>,
-        min_event_number: &mut u64,
-        ctx: &ReportContext,
+        rctx: &mut ReportContext<'_, '_, B, NS>,
     ) -> Result<bool, Error> {
-        let mut exchange = if let Some(session_id) = session_id {
-            Exchange::initiate_for_session(matter, session_id)?
-        } else {
-            // Commented out as we have issues on HomeKit with that:
-            // https://github.com/ivmarkov/esp-idf-matter/issues/3
-            // Exchange::initiate(matter, fabric_idx, peer_node_id, true).await?
-            Err(ErrorCode::NoSession)?
-        };
+        let mut exchange =
+            Exchange::initiate_for_session(matter, rctx.subscription().session_id())?;
 
         if let Some(mut tx) = self.buffers.get().await {
             // Always safe as `IMBuffer` is defined to be `MAX_EXCHANGE_RX_BUF_SIZE`, which is bigger than `MAX_EXCHANGE_TX_BUF_SIZE`
             unwrap!(tx.resize_default(MAX_EXCHANGE_TX_BUF_SIZE));
 
-            // Build a filter that consults the live changed-attrs table via the
-            // subscriptions mutex, lock-per-attribute. No snapshot is materialized.
-            let filter = ctx
-                .filter_active()
-                .then(|| SubAttrChangeFilter::new(self.subscriptions, ctx.since()));
-
             let primed = self
-                .report_data(
-                    sub.subscription_id,
-                    fabric_idx.get(),
-                    peer_node_id,
-                    min_event_number,
-                    &sub.buffer,
-                    &mut tx,
-                    &mut exchange,
-                    false,
-                    filter.as_ref().map(|f| f as &dyn AttrChangeFilter),
-                )
+                .report_data(rctx, &mut tx, &mut exchange, false)
                 .await?;
 
             exchange.acknowledge().await?;
@@ -762,8 +604,8 @@ where
             Ok(primed)
         } else {
             error!(
-                "No TX buffer available for processing subscription [F:{:x},P:{:x}]::{}",
-                fabric_idx, peer_node_id, sub.subscription_id,
+                "No TX buffer available for processing subscription {:?}",
+                rctx.subscription().ids(),
             );
 
             Ok(false)
@@ -825,22 +667,17 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn report_data(
         &self,
-        id: u32,
-        fabric_idx: u8,
-        peer_node_id: u64,
-        min_event_number: &mut u64,
-        rx: &[u8],
+        rctx: &mut ReportContext<'_, '_, B, NS>,
         tx: &mut [u8],
         exchange: &mut Exchange<'_>,
         with_dataver: bool,
-        filter: Option<&dyn AttrChangeFilter>,
     ) -> Result<bool, Error>
     where
         T: DataModelHandler,
     {
         let mut wb = WriteBuf::new(tx);
 
-        let sub_req = SubscribeReq::new(TLVElement::new(rx));
+        let sub_req = SubscribeReq::new(TLVElement::new(rctx.rx()));
         let req = if with_dataver {
             ReportDataReq::Subscribe(&sub_req)
         } else {
@@ -853,18 +690,23 @@ where
         let mut resp = ReportDataResponder::new(
             &req,
             &node,
-            Some(id),
+            Some(rctx.subscription().ids().id),
             HandlerInvoker::new(exchange, self),
-            EventReader::new(min_event_number),
+            EventReader::new(rctx.max_seen_event_number()),
             self.events,
-            filter,
         );
 
-        let sub_valid = resp.respond(&mut wb, false).await?;
-        if !sub_valid {
-            debug!(
-                "Subscription [F:{:x},P:{:x}]::{} removed during reporting",
-                fabric_idx, peer_node_id, id
+        let sub_valid = resp
+            .respond(&mut wb, false, rctx.should_send_if_empty(), |e, c, a| {
+                rctx.should_report_attr(e, c, a)
+            })
+            .await?;
+        if sub_valid {
+            rctx.update_max_seen_event_number(resp.event_reader.max_seen_event_number());
+        } else {
+            warn!(
+                "Subscription {:?} removed during reporting",
+                rctx.subscription().ids()
             );
         }
 
@@ -1039,6 +881,20 @@ where
         self.subscriptions
             .notify_attribute_changed(endpoint_id, cluster_id, attr_id)
     }
+
+    fn notify_cluster_changed(&self, endpoint_id: EndptId, cluster_id: ClusterId) {
+        self.subscriptions
+            .notify_cluster_attrs_changed(endpoint_id, cluster_id)
+    }
+
+    fn notify_endpoint_changed(&self, endpoint_id: EndptId) {
+        self.subscriptions
+            .notify_endpoint_attrs_changed(endpoint_id)
+    }
+
+    fn notify_all_changed(&self) {
+        self.subscriptions.notify_all_attrs_changed()
+    }
 }
 
 impl<const NS: usize, const NE: usize, C, B, T, S, N> EventEmitter
@@ -1061,9 +917,21 @@ where
     where
         F: FnOnce(EventTLVWrite<'_>) -> Result<(), Error>,
     {
-        self.events
-            .push(endpoint_id, cluster_id, event_id, priority, &self.kv, f)
+        let event_number =
+            self.events
+                .push(endpoint_id, cluster_id, event_id, priority, &self.kv, f)?;
+
+        self.subscriptions
+            .notify_event_emitted(endpoint_id, cluster_id, event_id);
+
+        Ok(event_number)
     }
+}
+
+pub enum RespondOutcome {
+    Accepted,
+    Rejected,
+    Empty,
 }
 
 /// This type responds with a `ReportData` response to all of:
@@ -1079,14 +947,8 @@ struct ReportDataResponder<'a, 'b, 'c, const NE: usize, C> {
     node: &'a Node<'a>,
     subscription_id: Option<u32>,
     invoker: HandlerInvoker<'b, 'c, C>,
-    event_reader: EventReader<'a>,
+    event_reader: EventReader,
     events: &'a Events<NE>,
-    /// Optional per-attribute filter consulted while emitting a subscription update.
-    ///
-    /// - `None`: unconditional report (IM read or priming report) — emit everything.
-    /// - `Some(_)`: incremental subscription update — only emit attributes accepted
-    ///   by the filter.
-    attr_filter: Option<&'a dyn AttrChangeFilter>,
 }
 
 impl<'a, 'b, 'c, const NE: usize, C> ReportDataResponder<'a, 'b, 'c, NE, C>
@@ -1103,9 +965,8 @@ where
         node: &'a Node<'a>,
         subscription_id: Option<u32>,
         invoker: HandlerInvoker<'b, 'c, C>,
-        event_reader: EventReader<'a>,
+        event_reader: EventReader,
         events: &'a Events<NE>,
-        attr_filter: Option<&'a dyn AttrChangeFilter>,
     ) -> Self {
         Self {
             req,
@@ -1114,7 +975,6 @@ where
             invoker,
             event_reader,
             events,
-            attr_filter,
         }
     }
 
@@ -1126,40 +986,56 @@ where
     /// - `suppress_last_resp` - whether to suppress the response from the peer. When multiple Matter messages are
     ///   being sent due to chunking, this is valid for the last chunk only, as the others - by necessity need to have a
     ///   status response by the other peer
-    async fn respond(
+    async fn respond<F>(
         &mut self,
         wb: &mut WriteBuf<'_>,
         suppress_last_resp: bool,
-    ) -> Result<bool, Error> {
+        send_if_empty: bool,
+        mut filter: F,
+    ) -> Result<bool, Error>
+    where
+        F: FnMut(EndptId, ClusterId, u32) -> bool,
+    {
+        let mut empty = true;
+
         self.start_reply(wb)?;
 
-        if !self.report_attributes(wb).await? {
+        if !self.report_attributes(wb, &mut empty, &mut filter).await? {
             return Ok(false);
         }
 
-        if !self.report_events(wb).await? {
+        if !self.report_events(wb, &mut empty).await? {
             return Ok(false);
         }
 
-        self.send(ReportDataChunkState::Done, suppress_last_resp, wb)
-            .await
+        if send_if_empty || !empty {
+            self.send(ReportDataChunkState::Done, suppress_last_resp, wb)
+                .await
+        } else {
+            info!("No data to report, skipping sending ReportData response");
+
+            Ok(true)
+        }
     }
 
-    async fn report_attributes(&mut self, wb: &mut WriteBuf<'_>) -> Result<bool, Error> {
+    async fn report_attributes<F>(
+        &mut self,
+        wb: &mut WriteBuf<'_>,
+        empty: &mut bool,
+        mut filter: F,
+    ) -> Result<bool, Error>
+    where
+        F: FnMut(EndptId, ClusterId, u32) -> bool,
+    {
         let accessor = self.invoker.exchange().accessor()?;
 
         if self.req.attr_requests()?.is_some() {
             wb.start_array(&TLVTag::Context(ReportDataRespTag::AttributeReports as u8))?;
 
-            for item in self.node.read(self.req, &accessor)? {
+            for item in self.node.read(self.req, &accessor, &mut filter)? {
                 let item = item?;
 
-                // Skip attributes the subscriber has already seen (not in the changed set).
-                if let (Some(filter), Ok(attr)) = (self.attr_filter, item.as_ref()) {
-                    if !filter.includes(attr.endpoint_id, attr.cluster_id, attr.attr_id) {
-                        continue;
-                    }
-                }
+                *empty = false;
 
                 loop {
                     let result = self.invoker.process_read(&item, &mut *wb).await;
@@ -1207,7 +1083,11 @@ where
         Ok(true)
     }
 
-    async fn report_events(&mut self, wb: &mut WriteBuf<'_>) -> Result<bool, Error> {
+    async fn report_events(
+        &mut self,
+        wb: &mut WriteBuf<'_>,
+        empty: &mut bool,
+    ) -> Result<bool, Error> {
         let accessor = self.invoker.exchange().accessor()?;
 
         if let Some(event_reqs) = self.req.event_requests()? {
@@ -1217,6 +1097,8 @@ where
             // and emit EventStatusIB for non-wildcard paths that don't match
             for event_req in event_reqs.iter() {
                 let path = event_req?;
+
+                *empty = false;
 
                 if !path.is_wildcard() {
                     if let Err(status) = self.node.validate_event_path(&path, &accessor) {

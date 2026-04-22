@@ -509,8 +509,7 @@ impl<'a> Matter<'a> {
         notify: &dyn AttrChangeNotifier,
     ) -> Result<(), Error> {
         let notify_mdns = || self.notify_mdns_changed();
-        let notify_change =
-            |endpt_id, clust_id, attr_id| notify.notify_attr_changed(endpt_id, clust_id, attr_id);
+        let notify_change = |endpt_id, clust_id| notify.notify_cluster_changed(endpt_id, clust_id);
 
         self.with_state(|state| {
             let mut rand = crypto.rand()?;
@@ -538,8 +537,7 @@ impl<'a> Matter<'a> {
     /// The method will return Ok(false) if there is no active PASE commissioning window to close.
     pub fn close_comm_window(&self, notify: &dyn AttrChangeNotifier) -> Result<bool, Error> {
         let notify_mdns = || self.notify_mdns_changed();
-        let notify_change =
-            |endpt_id, clust_id, attr_id| notify.notify_attr_changed(endpt_id, clust_id, attr_id);
+        let notify_change = |endpt_id, clust_id| notify.notify_cluster_changed(endpt_id, clust_id);
 
         self.with_state(|state| state.pase.close_comm_window(notify_mdns, notify_change))
     }
