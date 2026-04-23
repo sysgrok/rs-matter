@@ -299,17 +299,35 @@ impl FailSafe {
         crypto: C,
         session_mode: &SessionMode,
     ) -> Result<CanonPkcSecretKeyRef<'_>, Error> {
+        // The Matter spec does not forbid multiple CSRRequest commands within the
+        // same fail-safe (only `AddNOC`/`UpdateNOC` being already invoked forbids
+        // further `CSRRequest` commands). This matches the behavior of the C++
+        // Matter SDK, which on every `CSRRequest` replaces the pending operational
+        // key with a freshly generated one (see
+        // `PersistentStorageOperationalKeystore::NewOpKeypairForFabric` and
+        // `FabricTable::AllocatePendingOperationalKey`).
+        //
+        // Some commissioners (e.g. Samsung SmartThings) rely on this and re-issue
+        // `CSRRequest` inside the same fail-safe window after showing a "not
+        // certified" warning dialog, rather than disarming and re-arming the
+        // fail-safe.
         self.check_state(
             session_mode,
             NocFlags::empty(),
-            NocFlags::ADD_CSR_REQ_RECVD | NocFlags::UPDATE_CSR_REQ_RECVD,
+            NocFlags::ADD_NOC_RECVD | NocFlags::UPDATE_NOC_RECVD,
             NocFlags::ADD_CSR_REQ_RECVD,
         )?;
 
         let crypto_secret_key = crypto.generate_secret_key()?;
         crypto_secret_key.write_canon(&mut self.secret_key)?;
 
-        self.add_flags(NocFlags::ADD_CSR_REQ_RECVD);
+        // Make `ADD_CSR_REQ_RECVD` and `UPDATE_CSR_REQ_RECVD` mutually exclusive:
+        // only the flavor of the most recent `CSRRequest` remains set, so the
+        // subsequent `AddNOC` / `UpdateNOC` check reflects the latest request.
+        self.replace_flags(
+            NocFlags::UPDATE_CSR_REQ_RECVD,
+            NocFlags::ADD_CSR_REQ_RECVD,
+        );
 
         Ok(self.secret_key.reference())
     }
@@ -322,10 +340,12 @@ impl FailSafe {
         // Must be a CASE session
         Self::get_case_fab_idx(session_mode)?;
 
+        // See the comment in `add_csr_req` for why repeat `CSRRequest` commands
+        // are allowed within the same fail-safe.
         self.check_state(
             session_mode,
             NocFlags::empty(),
-            NocFlags::ADD_CSR_REQ_RECVD | NocFlags::UPDATE_CSR_REQ_RECVD,
+            NocFlags::ADD_NOC_RECVD | NocFlags::UPDATE_NOC_RECVD,
             NocFlags::UPDATE_CSR_REQ_RECVD,
         )?;
 
@@ -333,7 +353,10 @@ impl FailSafe {
             .generate_secret_key()?
             .write_canon(&mut self.secret_key)?;
 
-        self.add_flags(NocFlags::UPDATE_CSR_REQ_RECVD);
+        self.replace_flags(
+            NocFlags::ADD_CSR_REQ_RECVD,
+            NocFlags::UPDATE_CSR_REQ_RECVD,
+        );
 
         Ok(self.secret_key.reference())
     }
@@ -594,6 +617,16 @@ impl FailSafe {
     fn add_flags(&mut self, flags: NocFlags) {
         match &mut self.state {
             State::Armed(ctx) => ctx.flags |= flags,
+            _ => panic!("Not armed"),
+        }
+    }
+
+    fn replace_flags(&mut self, clear: NocFlags, set: NocFlags) {
+        match &mut self.state {
+            State::Armed(ctx) => {
+                ctx.flags.remove(clear);
+                ctx.flags.insert(set);
+            }
             _ => panic!("Not armed"),
         }
     }

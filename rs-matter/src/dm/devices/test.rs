@@ -31,8 +31,8 @@ pub const TEST_DEV_ATT: TestDeviceAttestation = TestDeviceAttestation(());
 /// Matches what chip-tool tests expect
 pub const TEST_VID: u16 = 0xfff1;
 /// Test Product ID
-/// MAtches what chip-tool tests expect
-pub const TEST_PID: u16 = 0x8001;
+/// Matches what chip-tool tests expect
+pub const TEST_PID: u16 = 0x8002;
 /// Test Basic Commissioning Data
 /// Matches what chip-tool tests expect
 pub const TEST_DEV_COMM: BasicCommData = BasicCommData {
