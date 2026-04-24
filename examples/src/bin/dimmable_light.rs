@@ -49,7 +49,7 @@ use rs_matter::dm::devices::DEV_TYPE_DIMMABLE_LIGHT;
 use rs_matter::dm::endpoints;
 use rs_matter::dm::events::Events;
 use rs_matter::dm::networks::eth::EthNetwork;
-use rs_matter::dm::networks::unix::UnixNetifs;
+use rs_matter::dm::networks::sys::SysNetifs;
 use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::IMBuffer;
 use rs_matter::dm::{
@@ -276,7 +276,7 @@ fn dm_handler<'a, LH: LevelControlHooks, OH: OnOffHooks>(
         endpoints::with_eth_sys(
             &false,
             &(),
-            &UnixNetifs,
+            &SysNetifs,
             rand,
             EmptyHandler
                 .chain(

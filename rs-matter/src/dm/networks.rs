@@ -20,6 +20,8 @@
 use core::future::Future;
 
 pub mod eth;
+#[cfg(all(feature = "os", any(unix, windows), not(target_os = "espidf")))]
+pub mod sys;
 #[cfg(all(unix, feature = "os", not(target_os = "espidf")))]
 pub mod unix;
 pub mod wireless;

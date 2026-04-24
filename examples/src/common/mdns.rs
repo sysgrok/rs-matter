@@ -70,49 +70,49 @@ async fn run_builtin_mdns<C: Crypto>(matter: &Matter<'_>, crypto: C) -> Result<(
     use rs_matter::transport::network::{Ipv4Addr, Ipv6Addr};
 
     // NOTE:
-    // Replace with your own network initialization for e.g. `no_std` environments
+    // Replace with your own network initialization for e.g. `no_std` environments.
+    //
+    // Uses the cross-platform `if-addrs` crate to enumerate interfaces so the
+    // examples work on Linux, macOS and Windows.
     #[inline(never)]
     fn initialize_network() -> Result<(Ipv4Addr, Ipv6Addr, u32), Error> {
         use log::error;
-        use nix::{net::if_::InterfaceFlags, sys::socket::SockaddrIn6};
         use rs_matter::error::ErrorCode;
-        let interfaces = || {
-            nix::ifaddrs::getifaddrs().unwrap().filter(|ia| {
-                ia.flags
-                    .contains(InterfaceFlags::IFF_UP | InterfaceFlags::IFF_BROADCAST)
-                    && !ia
-                        .flags
-                        .intersects(InterfaceFlags::IFF_LOOPBACK | InterfaceFlags::IFF_POINTOPOINT)
-            })
-        };
 
-        // A quick and dirty way to get a network interface that has a link-local IPv6 address assigned as well as a non-loopback IPv4
-        // Most likely, this is the interface we need
-        // (as opposed to all the docker and libvirt interfaces that might be assigned on the machine and which seem by default to be IPv4 only)
-        let (iname, ip, ipv6) = interfaces()
-            .filter_map(|ia| {
-                ia.address
-                    .and_then(|addr| addr.as_sockaddr_in6().map(SockaddrIn6::ip))
-                    .map(|ipv6| (ia.interface_name, ipv6))
+        let all = if_addrs::get_if_addrs().map_err(|_| ErrorCode::StdIoError)?;
+
+        // A quick and dirty way to pick the interface we want: find one that
+        // has both an IPv6 link-local address AND a non-loopback IPv4 address
+        // assigned. Most likely that's the "real" LAN interface we need, as
+        // opposed to all the docker/libvirt/virtual interfaces that might be
+        // present on the machine and which typically are IPv4-only.
+        let candidate = all
+            .iter()
+            .filter(|ia| !ia.is_loopback())
+            .filter_map(|ia| match ia.addr {
+                if_addrs::IfAddr::V6(ref v6) if (v6.ip.segments()[0] & 0xffc0) == 0xfe80 => {
+                    Some((ia.name.clone(), v6.ip, ia.index.unwrap_or(0)))
+                }
+                _ => None,
             })
-            .filter_map(|(iname, ipv6)| {
-                interfaces()
-                    .filter(|ia2| ia2.interface_name == iname)
-                    .find_map(|ia2| {
-                        ia2.address
-                            .and_then(|addr| addr.as_sockaddr_in().map(|addr| addr.ip().into()))
-                            .map(|ip: std::net::Ipv4Addr| (iname.clone(), ip, ipv6))
+            .find_map(|(iname, ipv6, index)| {
+                all.iter()
+                    .filter(|ia2| ia2.name == iname)
+                    .find_map(|ia2| match ia2.addr {
+                        if_addrs::IfAddr::V4(ref v4) => Some((iname.clone(), v4.ip, ipv6, index)),
+                        _ => None,
                     })
             })
-            .next()
             .ok_or_else(|| {
                 error!("Cannot find network interface suitable for mDNS broadcasting");
                 ErrorCode::StdIoError
             })?;
 
-        info!("Will use network interface {iname} with {ip}/{ipv6} for mDNS",);
+        let (iname, ip, ipv6, index) = candidate;
 
-        Ok((ip.octets().into(), ipv6.octets().into(), 0 as _))
+        info!("Will use network interface {iname} with {ip}/{ipv6} for mDNS");
+
+        Ok((ip.octets().into(), ipv6.octets().into(), index))
     }
 
     let (ipv4_addr, ipv6_addr, interface) = initialize_network()?;

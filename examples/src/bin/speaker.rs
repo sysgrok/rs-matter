@@ -38,7 +38,7 @@ use rs_matter::dm::devices::DEV_TYPE_SMART_SPEAKER;
 use rs_matter::dm::endpoints;
 use rs_matter::dm::events::Events;
 use rs_matter::dm::networks::eth::EthNetwork;
-use rs_matter::dm::networks::unix::UnixNetifs;
+use rs_matter::dm::networks::sys::SysNetifs;
 use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::{
     Async, AsyncHandler, AsyncMetadata, DataModel, Dataver, EmptyHandler, Endpoint, EpClMatcher,
@@ -191,7 +191,7 @@ fn dm_handler<'a, LH: LevelControlHooks, OH: OnOffHooks>(
         endpoints::with_eth_sys(
             &false,
             &(),
-            &UnixNetifs,
+            &SysNetifs,
             rand,
             EmptyHandler
                 .chain(

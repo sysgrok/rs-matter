@@ -197,6 +197,9 @@ futures-lite = { version = "2", optional = true }
 astro-dnssd = { version = "0.3", optional = true }
 zeroconf = { version = "0.15", optional = true }
 
+[target.'cfg(all(any(unix, windows), not(target_os = "espidf")))'.dependencies]
+if-addrs = "0.15"
+
 [target.'cfg(all(unix, not(target_os = "espidf")))'.dependencies]
 bitflags = "2"
 nix = { version = "0.30", features = ["net"] }
