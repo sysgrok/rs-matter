@@ -82,27 +82,40 @@ async fn run_builtin_mdns<C: Crypto>(matter: &Matter<'_>, crypto: C) -> Result<(
         let all = if_addrs::get_if_addrs().map_err(|_| ErrorCode::StdIoError)?;
 
         // A quick and dirty way to pick the interface we want: find one that
-        // has both an IPv6 link-local address AND a non-loopback IPv4 address
-        // assigned. Most likely that's the "real" LAN interface we need, as
-        // opposed to all the docker/libvirt/virtual interfaces that might be
-        // present on the machine and which typically are IPv4-only.
-        let candidate = all
-            .iter()
-            .filter(|ia| !ia.is_loopback())
-            .filter_map(|ia| match ia.addr {
-                if_addrs::IfAddr::V6(ref v6) if (v6.ip.segments()[0] & 0xffc0) == 0xfe80 => {
-                    Some((ia.name.clone(), v6.ip, ia.index.unwrap_or(0)))
-                }
-                _ => None,
-            })
-            .find_map(|(iname, ipv6, index)| {
-                all.iter()
-                    .filter(|ia2| ia2.name == iname)
-                    .find_map(|ia2| match ia2.addr {
-                        if_addrs::IfAddr::V4(ref v4) => Some((iname.clone(), v4.ip, ipv6, index)),
-                        _ => None,
-                    })
-            })
+        // has both an IPv6 address AND a non-loopback IPv4 address assigned.
+        // Prefer link-local (fe80::/10) IPv6 addresses — most likely that's
+        // the "real" LAN interface we need, as opposed to all the
+        // docker/libvirt/virtual interfaces that might be present on the
+        // machine and which typically are IPv4-only.
+        //
+        // On Windows the `if_addrs` crate may omit link-local IPv6 addresses,
+        // so we fall back to accepting any non-loopback IPv6 address paired
+        // with an IPv4 address on the same interface.
+        let find_candidate = |ipv6_filter: fn(std::net::Ipv6Addr) -> bool| {
+            all.iter()
+                .filter(|ia| !ia.is_loopback())
+                .filter_map(|ia| match ia.addr {
+                    if_addrs::IfAddr::V6(ref v6) if ipv6_filter(v6.ip) => {
+                        Some((ia.name.clone(), v6.ip, ia.index.unwrap_or(0)))
+                    }
+                    _ => None,
+                })
+                .find_map(|(iname, ipv6, index)| {
+                    all.iter()
+                        .filter(|ia2| ia2.name == iname)
+                        .find_map(|ia2| match ia2.addr {
+                            if_addrs::IfAddr::V4(ref v4) => {
+                                Some((iname.clone(), v4.ip, ipv6, index))
+                            }
+                            _ => None,
+                        })
+                })
+        };
+
+        // Prefer an interface with a link-local IPv6 address …
+        let candidate = find_candidate(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
+            // … otherwise accept any non-loopback IPv6 address
+            .or_else(|| find_candidate(|_| true))
             .ok_or_else(|| {
                 error!("Cannot find network interface suitable for mDNS broadcasting");
                 ErrorCode::StdIoError

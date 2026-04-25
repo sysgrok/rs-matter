@@ -248,8 +248,11 @@ fn main() -> Result<(), Error> {
         matter.open_basic_comm_window(MAX_COMM_WINDOW_TIMEOUT_SECS, &crypto, dm.change_notify())?;
     }
 
-    // Listen to SIGTERM because at the end of the test we'll receive it
+    // Listen to a termination signal: SIGTERM on Unix, SIGINT (Ctrl+C) on Windows
+    #[cfg(not(windows))]
     let mut term_signal = Signals::new([Signal::Term])?;
+    #[cfg(windows)]
+    let mut term_signal = Signals::new([Signal::Int])?;
     let mut term = pin!(async {
         term_signal.next().await;
         Ok(())
