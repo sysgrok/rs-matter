@@ -55,7 +55,7 @@ use rs_matter::dm::networks::unix::UnixNetifs;
 use rs_matter::dm::networks::wireless::{NetCtlState, NetCtlWithStatusImpl, WifiNetworks};
 use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::{
-    Async, AsyncHandler, AsyncMetadata, DataModel, Dataver, EmptyHandler, Endpoint, EpClMatcher,
+    Async, AsyncHandler, DataModel, DataModelHandler, Dataver, EmptyHandler, Endpoint, EpClMatcher,
     Node,
 };
 use rs_matter::error::Error;
@@ -277,7 +277,7 @@ fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks, T>(
     on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
     wifi_diag: &'a dyn WifiDiag,
     net_ctl: T,
-) -> impl AsyncMetadata + AsyncHandler + 'a
+) -> impl DataModelHandler + 'a
 where
     T: NetCtl + NetCtlStatus + 'a,
 {

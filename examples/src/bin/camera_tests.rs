@@ -78,8 +78,8 @@ use rs_matter::dm::networks::eth::EthNetwork;
 use rs_matter::dm::networks::SysNetifs;
 use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::{
-    ArrayAttributeRead, Async, AsyncHandler, AsyncMetadata, DataModel, Dataver, DeviceType,
-    EmptyHandler, Endpoint, EpClMatcher, InvokeContext, Node, ReadContext, WriteContext,
+    ArrayAttributeRead, Async, DataModel, DataModelHandler, Dataver, DeviceType, EmptyHandler,
+    Endpoint, EpClMatcher, InvokeContext, Node, ReadContext, WriteContext,
 };
 use rs_matter::error::{Error, ErrorCode};
 use rs_matter::im::FabricIndex;
@@ -602,7 +602,7 @@ fn main() -> Result<(), Error> {
 
     if !matter.is_commissioned() {
         matter.print_standard_qr_code(QrTextType::Unicode, DiscoveryCapabilities::IP)?;
-        matter.open_basic_comm_window(MAX_COMM_WINDOW_TIMEOUT_SECS, &crypto, dm.change_notify())?;
+        matter.open_basic_comm_window(MAX_COMM_WINDOW_TIMEOUT_SECS, &crypto, ())?;
     }
 
     #[cfg(not(windows))]
@@ -678,7 +678,7 @@ fn dm_handler<'a>(
     zone_mgmt: &'a ZoneMgmtHandler<StubZoneHooks, ZONE_NZ, ZONE_NV, ZONE_NT>,
     push_av: &'a PushAvStreamHandler<'static, StubPushHooks, PUSH_NC>,
     chime: ChimeHandler,
-) -> impl AsyncMetadata + AsyncHandler + 'a {
+) -> impl DataModelHandler + 'a {
     (
         NODE,
         endpoints::with_eth_sys(

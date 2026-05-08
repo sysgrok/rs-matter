@@ -61,8 +61,7 @@ use rs_matter::dm::networks::eth::EthNetwork;
 use rs_matter::dm::networks::SysNetifs;
 use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::{
-    Async, AsyncHandler, AsyncMetadata, Cluster, DataModel, Dataver, EmptyHandler, Endpoint,
-    EpClMatcher, Node,
+    Async, Cluster, DataModel, DataModelHandler, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
 };
 use rs_matter::error::Error;
 use rs_matter::pairing::qr::QrTextType;
@@ -186,10 +185,10 @@ fn main() -> Result<(), Error> {
     // `TestBasicInformation` and everything else) on the upstream-1.5
     // attribute set.
     let app_pipe = parse_app_pipe_override();
-    let node: &'static Node<'static> = if app_pipe.is_some() {
-        &NODE_BINFO_CV_EXPOSED
+    let node: Node<'static> = if app_pipe.is_some() {
+        NODE_BINFO_CV_EXPOSED
     } else {
-        &NODE
+        NODE
     };
 
     // Create the Data Model instance
@@ -292,16 +291,16 @@ fn main() -> Result<(), Error> {
 
         matter.print_standard_qr_code(QrTextType::Unicode, DiscoveryCapabilities::IP)?;
 
-        matter.open_basic_comm_window(MAX_COMM_WINDOW_TIMEOUT_SECS, &crypto, dm.change_notify())?;
+        matter.open_basic_comm_window(MAX_COMM_WINDOW_TIMEOUT_SECS, &crypto, ())?;
     }
 
     // Optional `--app-pipe <path>` CLI integration.
     //
     // The CHIP Python test framework (`MatterBaseTest::write_to_app_pipe`) sends out-of-band JSON
     // commands to the DUT through a named pipe at the given path.
-    let mut app_pipe_actions = pin!(run_app_pipe_actions(app_pipe, |action| {
+    let mut app_pipe_actions = pin!(run_app_pipe_actions(app_pipe, async |action| {
         if action.contains("SimulateConfigurationVersionChange") {
-            dm.bump_configuration_version()?;
+            dm.bump_configuration_version().await?;
 
             Ok(true)
         } else {
@@ -451,12 +450,12 @@ const NODE_BINFO_CV_EXPOSED: Node<'static> = Node {
 /// The Data Model handler + meta-data for our Matter device.
 /// The handler is the root endpoint 0 handler plus the on-off and unit testing handlers.
 fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
-    node: &'static Node<'static>,
+    node: Node<'static>,
     mut rand: impl RngCore + Copy,
     unit_testing_data: &'a RefCell<UnitTestingHandlerData>,
     on_off_1: &'a OnOffHandler<'a, OH, LH>,
     on_off_2: &'a OnOffHandler<'a, OH, LH>,
-) -> impl AsyncMetadata + AsyncHandler + 'a {
+) -> impl DataModelHandler + 'a {
     (
         node,
         endpoints::with_eth_sys(
@@ -567,7 +566,7 @@ fn parse_arg_opt_override<T>(opt: &str, conv: impl FnOnce(&str) -> T) -> Option<
 /// touch `&Matter` / `&DataModel` directly (neither is `Sync`).
 async fn run_app_pipe_actions(
     path: Option<String>,
-    mut action: impl FnMut(String) -> Result<bool, Error>,
+    mut action: impl AsyncFnMut(String) -> Result<bool, Error>,
 ) -> Result<(), Error> {
     let Some(path) = path else {
         info!("No --app-pipe provided; out-of-band command channel disabled.");
@@ -610,7 +609,7 @@ async fn run_app_pipe_actions(
                     let line = line.trim_end();
                     info!("[app-pipe] received: {line}");
 
-                    match action(line.to_string()) {
+                    match action(line.to_string()).await {
                         Ok(true) => info!("Processed"),
                         Ok(false) => info!("Skipped"),
                         Err(e) => warn!("Failed: {}", e),

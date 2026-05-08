@@ -62,7 +62,7 @@ use rs_matter::dm::networks::unix::UnixNetifs;
 use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::IMBuffer;
 use rs_matter::dm::{
-    Async, AsyncHandler, AsyncMetadata, DataModel, Dataver, EmptyHandler, Endpoint, EpClMatcher,
+    Async, AsyncHandler, DataModel, DataModelHandler, Dataver, EmptyHandler, Endpoint, EpClMatcher,
     Node,
 };
 use rs_matter::error::Error;
@@ -137,7 +137,7 @@ const NODE: Node<'static> = Node {
 fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
     mut rand: impl RngCore + Copy,
     on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
-) -> impl AsyncMetadata + AsyncHandler + 'a {
+) -> impl DataModelHandler + 'a {
     (
         NODE,
         endpoints::with_eth_sys(

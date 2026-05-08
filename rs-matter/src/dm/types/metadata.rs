@@ -15,200 +15,75 @@
  *    limitations under the License.
  */
 
-use crate::dm::Node;
+use core::future::Future;
 
-pub use asynch::*;
+use super::{AsyncHandler, Node};
 
-use super::Async;
-
-pub trait MetadataGuard {
-    fn node(&self) -> Node<'_>;
-}
-
-impl<T> MetadataGuard for &T
-where
-    T: MetadataGuard,
-{
-    fn node(&self) -> Node<'_> {
-        (**self).node()
-    }
-}
-
-impl<T> MetadataGuard for &mut T
-where
-    T: MetadataGuard,
-{
-    fn node(&self) -> Node<'_> {
-        (**self).node()
-    }
-}
-
-pub trait Metadata {
-    type MetadataGuard<'a>: MetadataGuard
+pub trait DataModelHandler {
+    type DataModelHandlerGuard<'a>: DataModelHandlerGuard
     where
         Self: 'a;
 
-    fn lock(&self) -> Self::MetadataGuard<'_>;
+    async fn access(&self) -> Self::DataModelHandlerGuard<'_>;
 }
 
-impl<T> Metadata for &T
+impl<T> DataModelHandler for &T
 where
-    T: Metadata,
+    T: DataModelHandler,
 {
-    type MetadataGuard<'a>
-        = T::MetadataGuard<'a>
+    type DataModelHandlerGuard<'a>
+        = T::DataModelHandlerGuard<'a>
     where
         Self: 'a;
 
-    fn lock(&self) -> Self::MetadataGuard<'_> {
-        (**self).lock()
+    fn access(&self) -> impl Future<Output = Self::DataModelHandlerGuard<'_>> {
+        (**self).access()
     }
 }
 
-impl<T> Metadata for &mut T
-where
-    T: Metadata,
-{
-    type MetadataGuard<'a>
-        = T::MetadataGuard<'a>
-    where
-        Self: 'a;
-
-    fn lock(&self) -> Self::MetadataGuard<'_> {
-        (**self).lock()
-    }
-}
-
-impl MetadataGuard for Node<'_> {
-    fn node(&self) -> Node<'_> {
-        Node {
-            endpoints: self.endpoints,
-        }
-    }
-}
-
-impl Metadata for Node<'_> {
-    type MetadataGuard<'g>
-        = Node<'g>
+impl<H: AsyncHandler> DataModelHandler for (Node<'_>, H) {
+    type DataModelHandlerGuard<'g>
+        = (Node<'g>, &'g H)
     where
         Self: 'g;
 
-    fn lock(&self) -> Self::MetadataGuard<'_> {
-        Node {
-            endpoints: self.endpoints,
-        }
-    }
-}
-
-impl<M, H> Metadata for (M, H)
-where
-    M: Metadata,
-{
-    type MetadataGuard<'a>
-        = M::MetadataGuard<'a>
-    where
-        Self: 'a;
-
-    fn lock(&self) -> Self::MetadataGuard<'_> {
-        self.0.lock()
-    }
-}
-
-impl<T> Metadata for Async<T>
-where
-    T: Metadata,
-{
-    type MetadataGuard<'a>
-        = T::MetadataGuard<'a>
-    where
-        Self: 'a;
-
-    fn lock(&self) -> Self::MetadataGuard<'_> {
-        self.0.lock()
-    }
-}
-
-mod asynch {
-    use core::future::Future;
-
-    use crate::dm::{Async, Node};
-
-    use super::{Metadata, MetadataGuard};
-
-    pub trait AsyncMetadata {
-        type MetadataGuard<'a>: MetadataGuard
-        where
-            Self: 'a;
-
-        async fn lock(&self) -> Self::MetadataGuard<'_>;
-    }
-
-    impl<T> AsyncMetadata for &T
-    where
-        T: AsyncMetadata,
-    {
-        type MetadataGuard<'a>
-            = T::MetadataGuard<'a>
-        where
-            Self: 'a;
-
-        fn lock(&self) -> impl Future<Output = Self::MetadataGuard<'_>> {
-            (**self).lock()
-        }
-    }
-
-    impl<T> AsyncMetadata for &mut T
-    where
-        T: AsyncMetadata,
-    {
-        type MetadataGuard<'a>
-            = T::MetadataGuard<'a>
-        where
-            Self: 'a;
-
-        fn lock(&self) -> impl Future<Output = Self::MetadataGuard<'_>> {
-            (**self).lock()
-        }
-    }
-
-    impl AsyncMetadata for Node<'_> {
-        type MetadataGuard<'g>
-            = Node<'g>
-        where
-            Self: 'g;
-
-        async fn lock(&self) -> Self::MetadataGuard<'_> {
+    async fn access(&self) -> Self::DataModelHandlerGuard<'_> {
+        (
             Node {
-                endpoints: self.endpoints,
-            }
+                endpoints: self.0.endpoints,
+            },
+            &self.1,
+        )
+    }
+}
+
+pub trait DataModelHandlerGuard {
+    fn node(&self) -> Node<'_>;
+
+    fn handler(&self) -> impl AsyncHandler + '_;
+}
+
+impl<T> DataModelHandlerGuard for &T
+where
+    T: DataModelHandlerGuard,
+{
+    fn node(&self) -> Node<'_> {
+        (**self).node()
+    }
+
+    fn handler(&self) -> impl AsyncHandler + '_ {
+        (**self).handler()
+    }
+}
+
+impl<H: AsyncHandler> DataModelHandlerGuard for (Node<'_>, H) {
+    fn node(&self) -> Node<'_> {
+        Node {
+            endpoints: self.0.endpoints,
         }
     }
 
-    impl<M, H> AsyncMetadata for (M, H)
-    where
-        M: AsyncMetadata,
-    {
-        type MetadataGuard<'a>
-            = M::MetadataGuard<'a>
-        where
-            Self: 'a;
-
-        fn lock(&self) -> impl Future<Output = Self::MetadataGuard<'_>> {
-            self.0.lock()
-        }
-    }
-
-    impl<T> AsyncMetadata for Async<T>
-    where
-        T: Metadata,
-    {
-        type MetadataGuard<'a>
-            = T::MetadataGuard<'a>
-        where
-            Self: 'a;
-
-        async fn lock(&self) -> Self::MetadataGuard<'_> {
-            self.0.lock()
-        }
+    fn handler(&self) -> impl AsyncHandler + '_ {
+        &self.1
     }
 }

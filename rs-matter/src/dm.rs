@@ -20,7 +20,7 @@ use core::num::NonZeroU8;
 use core::pin::pin;
 use core::time::Duration;
 
-use embassy_futures::select::{select, select3};
+use embassy_futures::select::select3;
 use embassy_time::{Instant, Timer};
 
 use crate::acl::Accessor;
@@ -144,12 +144,6 @@ where
         &self.kv
     }
 
-    /// Return a reference to the `ChangeNotify` instance used by this data model for tracking changes in the data model
-    /// and notifying the subscription processing task about them.
-    pub const fn change_notify(&self) -> &dyn DynAttrChangeNotifier {
-        self.subscriptions
-    }
-
     /// Open the basic commissioning window.
     ///
     /// Equivalent to [`Matter::open_basic_comm_window`] but additionally
@@ -162,9 +156,12 @@ where
     /// that has a `DataModel` available; `Matter::open_basic_comm_window`
     /// is the building block we delegate to and does not bump dataver
     /// (see its docs).
-    pub fn open_basic_comm_window(&self, timeout_secs: u16) -> Result<(), Error> {
+    pub async fn open_basic_comm_window(&self, timeout_secs: u16) -> Result<(), Error> {
+        let guard = self.handler.access().await;
+        let handler = guard.handler();
+
         self.matter
-            .open_basic_comm_window(timeout_secs, &self.crypto, self)
+            .open_basic_comm_window(timeout_secs, &self.crypto, (self, handler))
     }
 
     /// Close the active commissioning window.
@@ -173,8 +170,11 @@ where
     /// bumps the `AdministratorCommissioning` dataver and routes
     /// subscribers via this `DataModel`'s [`AttrChangeNotifier`]. See
     /// `open_basic_comm_window` for the rationale.
-    pub fn close_comm_window(&self) -> Result<bool, Error> {
-        self.matter.close_comm_window(self)
+    pub async fn close_comm_window(&self) -> Result<bool, Error> {
+        let guard = self.handler.access().await;
+        let handler = guard.handler();
+
+        self.matter.close_comm_window((self, handler))
     }
 
     /// Bump `BasicInformation::ConfigurationVersion` by one, persist
@@ -193,22 +193,31 @@ where
     /// reconfiguration events.
     ///
     /// Returns the new `ConfigurationVersion` value.
-    pub fn bump_configuration_version(&self) -> Result<u32, Error> {
+    pub async fn bump_configuration_version(&self) -> Result<u32, Error> {
         // Delegate to `Matter::bump_configuration_version` for the
         // in-memory bump + persist; pass `self` as the
         // `AttrChangeNotifier` so the cluster's `Dataver` is bumped
         // too (the `Matter`-level call by itself only routes
         // subscribers and persists).
-        self.kv
-            .access(|kvb, buf| self.matter.bump_configuration_version(kvb, buf, self))
+        let guard = self.handler.access().await;
+        let handler = guard.handler();
+
+        self.kv.access(|kvb, buf| {
+            self.matter
+                .bump_configuration_version(kvb, buf, (self, handler))
+        })
     }
 
     /// Run the Data Model instance.
     pub async fn run(&self) -> Result<(), Error> {
         let mut timeouts = pin!(self.run_timeout_checks());
-        let mut handler = pin!(self.handler.run(self));
+        let mut subscriptions = pin!(self.process_subscriptions());
+        // TODO XXX FIXME let mut handler = pin!(self.handler.run(self));
 
-        select(&mut timeouts, &mut handler).coalesce().await
+        // select3(&mut timeouts, &mut subscriptions, &mut handler).coalesce().await
+        embassy_futures::select::select(&mut timeouts, &mut subscriptions)
+            .coalesce()
+            .await
     }
 
     async fn run_timeout_checks(&self) -> Result<(), Error> {
@@ -217,35 +226,40 @@ where
         loop {
             Timer::after_secs(CHECK_INTERVAL_SECS).await;
 
-            self.timeout_checks()?;
+            self.check_timeouts().await?;
         }
     }
 
-    fn timeout_checks(&self) -> Result<(), Error> {
-        let mut notify_mdns = || self.matter.notify_mdns_changed();
-        let mut notify_change = |endpt_id, clust_id| {
-            self.change_notify()
-                .notify_cluster_changed(endpt_id, clust_id)
-        };
+    async fn check_timeouts(&self) -> Result<(), Error> {
+        let guard = self.handler.access().await;
+        let handler = guard.handler();
 
-        self.matter.with_state(|state| {
-            // Disarm the failsafe on timeout
-            state.failsafe.check_failsafe_timeout(
-                &mut state.fabrics,
-                &mut state.sessions,
-                &self.networks,
-                &self.kv,
-                &mut notify_mdns,
-                &mut notify_change,
-            )?;
+        let change_notify = (self, handler);
 
-            // Close the commissioning window on timeout
-            state
-                .pase
-                .check_comm_window_timeout(&mut notify_mdns, &mut notify_change)?;
+        {
+            let mut notify_mdns = || self.matter.notify_mdns_changed();
+            let mut notify_change =
+                |endpt_id, clust_id| change_notify.notify_cluster_changed(endpt_id, clust_id);
 
-            Ok(())
-        })
+            self.matter.with_state(|state| {
+                // Disarm the failsafe on timeout
+                state.failsafe.check_failsafe_timeout(
+                    &mut state.fabrics,
+                    &mut state.sessions,
+                    &self.networks,
+                    &self.kv,
+                    &mut notify_mdns,
+                    &mut notify_change,
+                )?;
+
+                // Close the commissioning window on timeout
+                state
+                    .pase
+                    .check_comm_window_timeout(&mut notify_mdns, &mut notify_change)?;
+
+                Ok(())
+            })
+        }
     }
 
     /// Answer a responding exchange using the `DataModelHandler` instance wrapped by this exchange handler.
@@ -278,7 +292,7 @@ where
             None
         };
 
-        self.timeout_checks()?;
+        self.check_timeouts().await?;
 
         // TODO: Handle the cases where we receive a timeout request
         // before read and subscribe. This is probably not allowed.
@@ -331,8 +345,9 @@ where
 
         let mut wb = WriteBuf::new(&mut tx);
 
-        let metadata = self.handler.lock().await;
-        let node = metadata.node();
+        let guard = self.handler.access().await;
+        let node = guard.node();
+        let handler = guard.handler();
 
         // Honor the `fabricFiltered` flag on the originating Read request.
         // When set, fabric-sensitive events emitted on other fabrics are
@@ -343,7 +358,7 @@ where
             &req,
             &node,
             None,
-            HandlerInvoker::new(exchange, self),
+            HandlerInvoker::new(exchange, (self, handler)),
             EventReader::new(0, u64::MAX, fabric_filtered),
             self.events,
         );
@@ -411,10 +426,12 @@ where
 
             let mut wb = WriteBuf::new(&mut tx);
 
-            let metadata = self.handler.lock().await;
-            let node = metadata.node();
+            let guard = self.handler.access().await;
+            let node = guard.node();
+            let handler = guard.handler();
 
-            let mut resp = WriteResponder::new(&req, &node, HandlerInvoker::new(exchange, self));
+            let mut resp =
+                WriteResponder::new(&req, &node, HandlerInvoker::new(exchange, (self, handler)));
 
             resp.respond(&mut wb, is_groupcast).await?;
 
@@ -488,10 +505,12 @@ where
 
         let mut wb = WriteBuf::new(&mut tx);
 
-        let metadata = self.handler.lock().await;
-        let node = metadata.node();
+        let guard = self.handler.access().await;
+        let node = guard.node();
+        let handler = guard.handler();
 
-        let mut resp = InvokeResponder::new(&req, &node, HandlerInvoker::new(exchange, self));
+        let mut resp =
+            InvokeResponder::new(&req, &node, HandlerInvoker::new(exchange, (self, handler)));
 
         resp.respond(&mut wb, is_groupcast).await
     }
@@ -509,7 +528,11 @@ where
 
         let accessor = exchange.accessor()?;
 
-        if let Err(err) = self.validate_subscribe(&req, &accessor).await {
+        let guard = self.handler.access().await;
+        let node = guard.node();
+        let handler = guard.handler();
+
+        if let Err(err) = self.validate_subscribe(&req, &node, &accessor).await {
             error!("Invalid subscribe request: {:?}", err);
             return Self::send_status(exchange, err.code().into()).await;
         }
@@ -550,7 +573,9 @@ where
             return Self::send_status(exchange, IMStatusCode::ResourceExhausted).await;
         };
 
-        let primed = self.report_data(&mut rctx, &mut tx, exchange, true).await?;
+        let primed = self
+            .report_data(&mut rctx, &mut tx, exchange, true, &node, handler)
+            .await?;
 
         if primed {
             exchange
@@ -572,15 +597,12 @@ where
     async fn validate_subscribe(
         &self,
         req: &SubscribeReq<'_>,
+        node: &Node<'_>,
         accessor: &Accessor<'_>,
     ) -> Result<(), Error> {
         // As per spec, we need to validate that the subscription request
         // contains existing endpoints, clusters and attributes, and if not
         // we should (a bit surprisingly) return InvalidAction
-
-        let metadata = self.handler.lock().await;
-
-        let node = metadata.node();
 
         let mut has_attrs = false;
         let mut has_events = false;
@@ -627,16 +649,20 @@ where
 
     /// Process all valid subscriptions in an endless loop, checking for changes
     /// and reporting them to the peers.
-    pub async fn process_subscriptions(&self, matter: &Matter<'_>) -> Result<(), Error> {
+    async fn process_subscriptions(&self) -> Result<(), Error> {
         loop {
             // TODO: Un-hardcode these 4 seconds of waiting when the more precise change detection logic is implemented
             let mut timeout = pin!(Timer::after(embassy_time::Duration::from_secs(4)));
             let mut notification = pin!(self.subscriptions.notification.wait());
-            let mut session_removed = pin!(matter.session_removed.wait());
+            let mut session_removed = pin!(self.matter.session_removed.wait());
 
             select3(&mut notification, &mut timeout, &mut session_removed).await;
 
             let now = Instant::now();
+
+            let guard = self.handler.access().await;
+            let node = guard.node();
+            let handler = guard.handler();
 
             // First remove all expired or no-longer valid subscriptions
 
@@ -648,7 +674,7 @@ where
                             return Some("expired");
                         }
 
-                        matter.with_state(|state| {
+                        self.matter.with_state(|state| {
                             if state.fabrics.get(sub.ids().fab_idx).is_none() {
                                 return Some("fabric removed");
                             }
@@ -687,7 +713,7 @@ where
                     break;
                 };
 
-                let result = self.process_subscription(matter, &mut rctx).await;
+                let result = self.process_subscription(&mut rctx, &node, &handler).await;
 
                 match result {
                     Ok(true) => rctx.set_keep(),
@@ -720,18 +746,19 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn process_subscription(
         &self,
-        matter: &Matter<'_>,
         rctx: &mut ReportContext<'_, '_, B, NS>,
+        node: &Node<'_>,
+        handler: impl AsyncHandler,
     ) -> Result<bool, Error> {
         let mut exchange =
-            Exchange::initiate_for_session(matter, rctx.subscription().session_id())?;
+            Exchange::initiate_for_session(self.matter, rctx.subscription().session_id())?;
 
         if let Some(mut tx) = self.buffers.get().await {
             // Always safe as `IMBuffer` is defined to be `MAX_EXCHANGE_RX_BUF_SIZE`, which is bigger than `MAX_EXCHANGE_TX_BUF_SIZE`
             unwrap!(tx.resize_default(MAX_EXCHANGE_TX_BUF_SIZE));
 
             let primed = self
-                .report_data(rctx, &mut tx, &mut exchange, false)
+                .report_data(rctx, &mut tx, &mut exchange, false, node, &handler)
                 .await?;
 
             exchange.acknowledge().await?;
@@ -806,6 +833,8 @@ where
         tx: &mut [u8],
         exchange: &mut Exchange<'_>,
         with_dataver: bool,
+        node: &Node<'_>,
+        handler: impl AsyncHandler,
     ) -> Result<bool, Error>
     where
         T: DataModelHandler,
@@ -819,9 +848,6 @@ where
             ReportDataReq::SubscribeReport(&sub_req)
         };
 
-        let metadata = self.handler.lock().await;
-        let node = metadata.node();
-
         // Honor the `fabricFiltered` flag on the originating Subscribe request.
         // When set, fabric-sensitive events emitted on other fabrics are
         // dropped before they reach the wire (Matter Core spec section 8.5.2).
@@ -829,9 +855,9 @@ where
 
         let mut resp = ReportDataResponder::new(
             &req,
-            &node,
+            node,
             Some(rctx.subscription().ids().id),
-            HandlerInvoker::new(exchange, self),
+            HandlerInvoker::new(exchange, (self, handler)),
             EventReader::new(
                 rctx.max_seen_event_number(),
                 rctx.next_max_seen_event_number(),
@@ -977,7 +1003,7 @@ where
     }
 }
 
-impl<const NS: usize, const NE: usize, C, B, T, S, N> HandlerContext
+impl<const NS: usize, const NE: usize, C, B, T, S, N> AttrChangeNotifierAccess
     for DataModel<'_, NS, NE, C, B, T, S, N>
 where
     C: Crypto,
@@ -986,74 +1012,99 @@ where
     S: KvBlobStoreAccess,
     N: NetworksAccess,
 {
-    fn matter(&self) -> &Matter<'_> {
-        self.matter
-    }
+    async fn access<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn AttrChangeNotifier) -> R,
+    {
+        let guard = self.handler.access().await;
+        let handler = guard.handler();
+        let notifier = (self, handler);
 
-    fn crypto(&self) -> impl Crypto + '_ {
-        &self.crypto
-    }
-
-    fn kv(&self) -> impl KvBlobStoreAccess + '_ {
-        &self.kv
-    }
-
-    fn networks(&self) -> impl NetworksAccess + '_ {
-        &self.networks
-    }
-
-    fn handler(&self) -> impl AsyncHandler + '_ {
-        &self.handler
-    }
-
-    fn buffers(&self) -> impl BufferAccess<IMBuffer> + '_ {
-        self.buffers
+        f(&notifier)
     }
 }
 
-impl<const NS: usize, const NE: usize, C, B, T, S, N> AttrChangeNotifier
-    for DataModel<'_, NS, NE, C, B, T, S, N>
+impl<const NS: usize, const NE: usize, C, B, T, S, N, H> HandlerContext
+    for (&DataModel<'_, NS, NE, C, B, T, S, N>, H)
 where
     C: Crypto,
     B: BufferAccess<IMBuffer>,
     T: DataModelHandler,
     S: KvBlobStoreAccess,
     N: NetworksAccess,
+    H: AsyncHandler,
+{
+    fn matter(&self) -> &Matter<'_> {
+        self.0.matter
+    }
+
+    fn crypto(&self) -> impl Crypto + '_ {
+        &self.0.crypto
+    }
+
+    fn kv(&self) -> impl KvBlobStoreAccess + '_ {
+        &self.0.kv
+    }
+
+    fn networks(&self) -> impl NetworksAccess + '_ {
+        &self.0.networks
+    }
+
+    fn handler(&self) -> impl AsyncHandler + '_ {
+        &self.1
+    }
+
+    fn buffers(&self) -> impl BufferAccess<IMBuffer> + '_ {
+        &self.0.buffers
+    }
+}
+
+impl<const NS: usize, const NE: usize, C, B, T, S, N, H> AttrChangeNotifier
+    for (&DataModel<'_, NS, NE, C, B, T, S, N>, H)
+where
+    C: Crypto,
+    B: BufferAccess<IMBuffer>,
+    T: DataModelHandler,
+    S: KvBlobStoreAccess,
+    N: NetworksAccess,
+    H: AsyncHandler,
 {
     fn notify_attr_changed(&self, endpoint_id: EndptId, cluster_id: ClusterId, attr_id: AttrId) {
-        self.handler.bump_dataver(MatchContextInstance::new(
+        self.1.bump_dataver(MatchContextInstance::new(
             Some(endpoint_id),
             Some(cluster_id),
         ));
-        self.subscriptions
+        self.0
+            .subscriptions
             .notify_attribute_changed(endpoint_id, cluster_id, attr_id);
     }
 
     fn notify_cluster_changed(&self, endpoint_id: EndptId, cluster_id: ClusterId) {
-        self.handler.bump_dataver(MatchContextInstance::new(
+        self.1.bump_dataver(MatchContextInstance::new(
             Some(endpoint_id),
             Some(cluster_id),
         ));
-        self.subscriptions
+        self.0
+            .subscriptions
             .notify_cluster_attrs_changed(endpoint_id, cluster_id);
     }
 
     fn notify_endpoint_changed(&self, endpoint_id: EndptId) {
-        self.handler
+        self.1
             .bump_dataver(MatchContextInstance::new(Some(endpoint_id), None));
-        self.subscriptions
+        self.0
+            .subscriptions
             .notify_endpoint_attrs_changed(endpoint_id)
     }
 
     fn notify_all_changed(&self) {
-        self.handler
-            .bump_dataver(MatchContextInstance::new(None, None));
-        self.subscriptions.notify_all_attrs_changed()
+        self.1.bump_dataver(MatchContextInstance::new(None, None));
+        self.0.subscriptions.notify_all_attrs_changed()
     }
 }
 
-impl<const NS: usize, const NE: usize, C, B, T, S, N> EventEmitter
-    for DataModel<'_, NS, NE, C, B, T, S, N>
+impl<const NS: usize, const NE: usize, C, B, T, S, N, H> EventEmitter
+    for (&DataModel<'_, NS, NE, C, B, T, S, N>, H)
 where
     C: Crypto,
     B: BufferAccess<IMBuffer>,
@@ -1073,10 +1124,12 @@ where
         F: FnOnce(EventTLVWrite<'_>) -> Result<(), Error>,
     {
         let event_number =
-            self.events
-                .push(endpoint_id, cluster_id, event_id, priority, &self.kv, f)?;
+            self.0
+                .events
+                .push(endpoint_id, cluster_id, event_id, priority, &self.0.kv, f)?;
 
-        self.subscriptions
+        self.0
+            .subscriptions
             .notify_event_emitted(endpoint_id, cluster_id, event_id);
 
         Ok(event_number)

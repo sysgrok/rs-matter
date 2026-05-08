@@ -22,7 +22,7 @@ use core::mem::MaybeUninit;
 use num_derive::FromPrimitive;
 
 use crate::crypto::Crypto;
-use crate::dm::AttrChangeNotifier;
+use crate::dm::AttrChangeNotifierAccess;
 use crate::error::{Error, ErrorCode};
 use crate::respond::ExchangeHandler;
 use crate::tlv::{FromTLV, ToTLV};
@@ -222,14 +222,14 @@ impl<'a> StatusReport<'a> {
 }
 
 /// Handle messages related to the Secure Channel
-pub struct SecureChannel<'a, C> {
+pub struct SecureChannel<C, N> {
     crypto: C,
-    notify: &'a dyn AttrChangeNotifier,
+    notify: N,
 }
 
-impl<'a, C: Crypto> SecureChannel<'a, C> {
+impl<C: Crypto, N: AttrChangeNotifierAccess> SecureChannel<C, N> {
     #[inline(always)]
-    pub const fn new(crypto: C, notify: &'a dyn AttrChangeNotifier) -> Self {
+    pub const fn new(crypto: C, notify: N) -> Self {
         Self { crypto, notify }
     }
 
@@ -246,7 +246,7 @@ impl<'a, C: Crypto> SecureChannel<'a, C> {
         match meta.opcode()? {
             OpCode::PBKDFParamRequest => {
                 let mut pase = MaybeUninit::uninit(); // TODO LARGE BUFFER
-                pase.init_with(PaseResponder::init(&self.crypto, self.notify))
+                pase.init_with(PaseResponder::init(&self.crypto, &self.notify))
                     .handle(exchange)
                     .await
             }
@@ -264,7 +264,7 @@ impl<'a, C: Crypto> SecureChannel<'a, C> {
     }
 }
 
-impl<C: Crypto> ExchangeHandler for SecureChannel<'_, C> {
+impl<C: Crypto, N: AttrChangeNotifierAccess> ExchangeHandler for SecureChannel<C, N> {
     fn handle(&self, exchange: &mut Exchange<'_>) -> impl Future<Output = Result<(), Error>> {
         SecureChannel::handle(self, exchange)
     }

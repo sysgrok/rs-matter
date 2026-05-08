@@ -38,6 +38,33 @@ use super::{AttrDetails, AttrId, ClusterId, CmdDetails, EndptId, InvokeReply, Re
 
 pub use asynch::*;
 
+pub trait AttrChangeNotifierAccess {
+    async fn access<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn AttrChangeNotifier) -> R;
+}
+
+impl<T> AttrChangeNotifierAccess for &T
+where
+    T: AttrChangeNotifierAccess,
+{
+    async fn access<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn AttrChangeNotifier) -> R,
+    {
+        (**self).access(f).await
+    }
+}
+
+impl AttrChangeNotifierAccess for () {
+    async fn access<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn AttrChangeNotifier) -> R,
+    {
+        f(&())
+    }
+}
+
 pub trait DynAttrChangeNotifier: DynBase + AttrChangeNotifier {}
 
 impl<T> DynAttrChangeNotifier for T where T: DynBase + AttrChangeNotifier {}
@@ -959,9 +986,6 @@ where
         self.data
     }
 }
-
-pub trait DataModelHandler: super::AsyncMetadata + AsyncHandler {}
-impl<T> DataModelHandler for T where T: super::AsyncMetadata + AsyncHandler {}
 
 /// A version of the `AsyncHandler` trait that never awaits any operation.
 ///

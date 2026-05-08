@@ -68,7 +68,7 @@ fn test_unsecured_exchange_over_udp() {
             .unwrap();
 
         // Device side: transport + SecureChannel responder (handles PBKDFParamRequest)
-        let sc = SecureChannel::new(&crypto, &());
+        let sc = SecureChannel::new(&crypto, ());
         let responder = Responder::new("device", sc, &device_matter, 0);
 
         let device_fut = async {

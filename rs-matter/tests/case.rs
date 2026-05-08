@@ -153,7 +153,7 @@ fn test_case_handshake() {
         // ---- 5. Device side: transport + SecureChannel responder ----
         // No need to open commissioning window for CASE
 
-        let sc = SecureChannel::new(&crypto, &());
+        let sc = SecureChannel::new(&crypto, ());
         let responder = Responder::new("device", sc, &device_matter, 0);
 
         let device_fut = async {

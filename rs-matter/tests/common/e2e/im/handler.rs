@@ -25,7 +25,7 @@ use rs_matter::dm::clusters::desc::{self, ClusterHandler as _, DescHandler};
 use rs_matter::dm::devices::{DEV_TYPE_ON_OFF_LIGHT, DEV_TYPE_ROOT_NODE};
 use rs_matter::dm::endpoints::{with_eth_sys, EthSysHandler, ROOT_ENDPOINT_ID};
 use rs_matter::dm::{
-    Async, AsyncHandler, AsyncMetadata, ChainedHandler, Dataver, EmptyHandler, Endpoint,
+    Async, AsyncHandler, ChainedHandler, DataModelHandler, Dataver, EmptyHandler, Endpoint,
     EpClMatcher, InvokeContext, InvokeReply, MatchContext, Node, ReadContext, ReadReply,
     WriteContext,
 };
@@ -129,14 +129,14 @@ impl<'a, OH: OnOffHooks, LH: LevelControlHooks> AsyncHandler for E2eTestHandler<
     }
 }
 
-impl<'a, OH: OnOffHooks, LH: LevelControlHooks> AsyncMetadata for E2eTestHandler<'a, OH, LH> {
-    type MetadataGuard<'g>
-        = Node<'g>
+impl<'a, OH: OnOffHooks, LH: LevelControlHooks> DataModelHandler for E2eTestHandler<'a, OH, LH> {
+    type DataModelHandlerGuard<'g>
+        = (Node<'g>, &'g E2eTestHandler<'a, OH, LH>)
     where
         Self: 'g;
 
-    async fn lock(&self) -> Self::MetadataGuard<'_> {
-        Self::NODE
+    async fn access(&self) -> Self::DataModelHandlerGuard<'_> {
+        (Self::NODE, self)
     }
 }
 

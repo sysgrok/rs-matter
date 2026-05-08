@@ -26,7 +26,7 @@ use crate::crypto::{
     CanonEcPointRef, Crypto, HmacHashRef, Kdf, AEAD_CANON_KEY_LEN, EC_POINT_ZEROED,
     HMAC_HASH_ZEROED,
 };
-use crate::dm::AttrChangeNotifier;
+use crate::dm::AttrChangeNotifierAccess;
 use crate::error::{Error, ErrorCode};
 use crate::sc::pase::spake2p::{Spake2P, Spake2pRandom, Spake2pRandomRef, Spake2pSessionKeys};
 use crate::sc::{check_opcode, complete_with_status, OpCode, SCStatusCodes};
@@ -41,15 +41,15 @@ use super::{
 };
 
 /// The PASE Responder (device side) handler
-pub struct PaseResponder<'a, C: Crypto> {
+pub struct PaseResponder<C, N> {
     crypto: C,
-    notify: &'a dyn AttrChangeNotifier,
+    notify: N,
     spake2p: Spake2P,
 }
 
-impl<'a, C: Crypto> PaseResponder<'a, C> {
+impl<C: Crypto, N: AttrChangeNotifierAccess> PaseResponder<C, N> {
     /// Create a new PASE Responder handler
-    pub const fn new(crypto: C, notify: &'a dyn AttrChangeNotifier) -> Self {
+    pub const fn new(crypto: C, notify: N) -> Self {
         // TODO: Can any PBKDF2 calculation be pre-computed here
         Self {
             crypto,
@@ -58,7 +58,7 @@ impl<'a, C: Crypto> PaseResponder<'a, C> {
         }
     }
 
-    pub fn init(crypto: C, notify: &'a dyn AttrChangeNotifier) -> impl Init<Self> {
+    pub fn init(crypto: C, notify: N) -> impl Init<Self> {
         init!(Self {
             crypto,
             notify,
@@ -88,12 +88,18 @@ impl<'a, C: Crypto> PaseResponder<'a, C> {
         let pake_failed = matches!(result, Ok(false) | Err(_));
 
         if pake_failed {
-            let notify_mdns = || exchange.matter().notify_mdns_changed();
-            let notify_change =
-                |endpt_id, cluster_id| self.notify.notify_cluster_changed(endpt_id, cluster_id);
+            let _ = self
+                .notify
+                .access(|notify| {
+                    let notify_mdns = || exchange.matter().notify_mdns_changed();
+                    let notify_change =
+                        |endpt_id, cluster_id| notify.notify_cluster_changed(endpt_id, cluster_id);
 
-            let _ = exchange
-                .with_state(|state| state.pase.record_pake_failure(notify_mdns, notify_change));
+                    exchange.with_state(|state| {
+                        state.pase.record_pake_failure(notify_mdns, notify_change)
+                    })
+                })
+                .await;
         }
 
         result.map(|_| ())
@@ -165,26 +171,29 @@ impl<'a, C: Crypto> PaseResponder<'a, C> {
         let mut salt = super::spake2p::SPAKE2P_VERIFIER_SALT_ZEROED;
         let mut count = 0;
 
-        let notify_mdns = || exchange.matter().notify_mdns_changed();
-        let notify_change =
-            |endpt_id, cluster_id| self.notify.notify_cluster_changed(endpt_id, cluster_id);
+        let has_comm_window = self
+            .notify
+            .access(|notify| {
+                let notify_mdns = || exchange.matter().notify_mdns_changed();
+                let notify_change =
+                    |endpt_id, cluster_id| notify.notify_cluster_changed(endpt_id, cluster_id);
 
-        let has_comm_window = {
-            exchange.with_state(|state| {
-                state
-                    .pase
-                    .check_comm_window_timeout(notify_mdns, notify_change)?;
+                exchange.with_state(|state| {
+                    state
+                        .pase
+                        .check_comm_window_timeout(notify_mdns, notify_change)?;
 
-                if let Some(comm_window) = state.pase.comm_window() {
-                    salt.load(comm_window.verifier.salt.reference());
-                    count = comm_window.verifier.count;
+                    if let Some(comm_window) = state.pase.comm_window() {
+                        salt.load(comm_window.verifier.salt.reference());
+                        count = comm_window.verifier.count;
 
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            })?
-        };
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                })
+            })
+            .await?;
 
         if has_comm_window {
             let mut our_random = Spake2pRandom::new();
@@ -275,31 +284,34 @@ impl<'a, C: Crypto> PaseResponder<'a, C> {
         let mut b_pt = EC_POINT_ZEROED;
         let mut cb = HMAC_HASH_ZEROED;
 
-        let notify_mdns = || exchange.matter().notify_mdns_changed();
-        let notify_change =
-            |endpt_id, cluster_id| self.notify.notify_cluster_changed(endpt_id, cluster_id);
+        let has_comm_window = self
+            .notify
+            .access(|notify| {
+                let notify_mdns = || exchange.matter().notify_mdns_changed();
+                let notify_change =
+                    |endpt_id, cluster_id| notify.notify_cluster_changed(endpt_id, cluster_id);
 
-        let has_comm_window = {
-            exchange.with_state(|state| {
-                state
-                    .pase
-                    .check_comm_window_timeout(notify_mdns, notify_change)?;
+                exchange.with_state(|state| {
+                    state
+                        .pase
+                        .check_comm_window_timeout(notify_mdns, notify_change)?;
 
-                if let Some(comm_window) = state.pase.comm_window() {
-                    self.spake2p.setup_verifier(
-                        &self.crypto,
-                        &comm_window.verifier,
-                        a_pt,
-                        &mut b_pt,
-                        &mut cb,
-                    )?;
+                    if let Some(comm_window) = state.pase.comm_window() {
+                        self.spake2p.setup_verifier(
+                            &self.crypto,
+                            &comm_window.verifier,
+                            a_pt,
+                            &mut b_pt,
+                            &mut cb,
+                        )?;
 
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            })?
-        };
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                })
+            })
+            .await?;
 
         if has_comm_window {
             exchange

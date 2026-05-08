@@ -19,10 +19,10 @@ use core::fmt::Display;
 use core::future::Future;
 use core::pin::pin;
 
-use embassy_futures::select::{select3, select_slice};
+use embassy_futures::select::{select, select_slice};
 
 use crate::crypto::Crypto;
-use crate::dm::clusters::net_comm;
+use crate::dm::clusters::net_comm::{self, NetworksAccess};
 use crate::dm::DataModelHandler;
 use crate::dm::{DataModel, IMBuffer};
 use crate::error::Error;
@@ -240,29 +240,30 @@ where
 
 /// A type alias for the "default" responder handler, which is a chained handler of the `DataModel` and `SecureChannel` handlers.
 pub type DefaultExchangeHandler<'d, 'a, const NS: usize, const NE: usize, C, B, T, S, N> =
-    ChainedExchangeHandler<&'d DataModel<'a, NS, NE, C, B, T, S, N>, SecureChannel<'d, &'d C>>;
+    ChainedExchangeHandler<
+        &'d DataModel<'a, NS, NE, C, B, T, S, N>,
+        SecureChannel<&'d C, &'d DataModel<'a, NS, NE, C, B, T, S, N>>,
+    >;
 
 impl<'d, 'a, const NS: usize, const NE: usize, C, B, T, S, N>
     Responder<'a, DefaultExchangeHandler<'d, 'a, NS, NE, C, B, T, S, N>>
 where
+    C: Crypto,
     B: BufferAccess<IMBuffer>,
+    T: DataModelHandler,
+    S: KvBlobStoreAccess,
+    N: NetworksAccess,
 {
     /// Creates a "default" responder. This is a responder that composes and uses the `rs-matter`-provided `ExchangeHandler` implementations
     /// (`SecureChannel` and `DataModel`) for handling the Secure Channel protocol and the Interaction Model protocol.
     #[inline(always)]
-    pub const fn new_default(data_model: &'d DataModel<'a, NS, NE, C, B, T, S, N>) -> Self
-    where
-        C: Crypto,
-        T: DataModelHandler,
-        S: KvBlobStoreAccess,
-        N: net_comm::NetworksAccess,
-    {
+    pub const fn new_default(data_model: &'d DataModel<'a, NS, NE, C, B, T, S, N>) -> Self {
         Self::new(
             "Responder",
             ChainedExchangeHandler::new(
                 PROTO_ID_INTERACTION_MODEL,
                 data_model,
-                SecureChannel::new(data_model.crypto(), data_model.change_notify()),
+                SecureChannel::new(data_model.crypto(), data_model),
             ),
             data_model.matter(),
             0,
@@ -326,9 +327,8 @@ where
     pub async fn run<const A: usize, const O: usize>(&self) -> Result<(), Error> {
         let mut actual = pin!(self.responder.run::<A>());
         let mut busy = pin!(self.busy_responder.run::<O>());
-        let mut sub = pin!(self.process_subscriptions());
 
-        select3(&mut actual, &mut busy, &mut sub).coalesce().await
+        select(&mut actual, &mut busy).coalesce().await
     }
 
     /// Get a reference to the main responder.
@@ -337,32 +337,14 @@ where
     #[allow(clippy::type_complexity)]
     pub const fn responder(
         &self,
-    ) -> &Responder<
-        'a,
-        ChainedExchangeHandler<&'d DataModel<'a, NS, NE, C, B, T, S, N>, SecureChannel<'d, &'d C>>,
-    > {
+    ) -> &Responder<'a, DefaultExchangeHandler<'d, 'a, NS, NE, C, B, T, S, N>> {
         &self.responder
     }
 
     /// Get a reference to the busy responder.
     ///
     /// Useful when the user would like to organize its own herd of busy responders rather than using the `run` method.
-    pub const fn busy_responder(
-        &self,
-    ) -> &Responder<'a, ChainedExchangeHandler<BusyInteractionModel, BusySecureChannel>> {
+    pub const fn busy_responder(&self) -> &Responder<'a, BusyExchangeHandler> {
         &self.busy_responder
-    }
-
-    /// Process subscriptions.
-    ///
-    /// Useful when the user would like to call `process_subscriptions` manually rather than using the `run` method.
-    pub async fn process_subscriptions(&self) -> Result<(), Error> {
-        let mut process = pin!(self
-            .responder
-            .handler()
-            .handler
-            .process_subscriptions(self.responder.matter));
-
-        (&mut process).await
     }
 }

@@ -431,11 +431,11 @@ impl<'a> Matter<'a> {
     /// [`crate::dm::DataModel::open_basic_comm_window`], which delegates
     /// here and additionally bumps dataver via its
     /// [`AttrChangeNotifier`] impl.
-    pub fn open_basic_comm_window<C: Crypto>(
+    pub fn open_basic_comm_window<C: Crypto, N: AttrChangeNotifier>(
         &self,
         timeout_secs: u16,
         crypto: C,
-        notify: &dyn AttrChangeNotifier,
+        notify: N,
     ) -> Result<(), Error> {
         let notify_mdns = || self.notify_mdns_changed();
         let notify_change = |endpt_id, clust_id| notify.notify_cluster_changed(endpt_id, clust_id);
@@ -470,7 +470,7 @@ impl<'a> Matter<'a> {
     /// `AdministratorCommissioning`. Prefer
     /// [`crate::dm::DataModel::close_comm_window`] when a `DataModel`
     /// is available.
-    pub fn close_comm_window(&self, notify: &dyn AttrChangeNotifier) -> Result<bool, Error> {
+    pub fn close_comm_window<N: AttrChangeNotifier>(&self, notify: N) -> Result<bool, Error> {
         let notify_mdns = || self.notify_mdns_changed();
         let notify_change = |endpt_id, clust_id| notify.notify_cluster_changed(endpt_id, clust_id);
 
@@ -498,11 +498,11 @@ impl<'a> Matter<'a> {
     /// [`AttrChangeNotifier`] impl.
     ///
     /// Returns the new `ConfigurationVersion` value.
-    pub fn bump_configuration_version<S: KvBlobStore>(
+    pub fn bump_configuration_version<S: KvBlobStore, N: AttrChangeNotifier>(
         &self,
         mut kv: S,
         buf: &mut [u8],
-        notify: &dyn AttrChangeNotifier,
+        notify: N,
     ) -> Result<u32, Error> {
         use crate::dm::clusters::basic_info::AttributeId;
         use crate::dm::clusters::basic_info::FULL_CLUSTER as BASIC_INFO_CLUSTER;

@@ -114,7 +114,7 @@ use rs_matter::dm::subscriptions::Subscriptions;
 use rs_matter::dm::DeviceType;
 use rs_matter::dm::IMBuffer;
 use rs_matter::dm::{
-    AsyncHandler, AsyncMetadata, DataModel, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
+    AsyncHandler, DataModel, DataModelHandler, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
 };
 use rs_matter::error::Error;
 use rs_matter::pairing::qr::QrTextType;
@@ -1395,7 +1395,7 @@ fn dm_handler<'a>(
         CAM_AV_SETTINGS_NS,
     >,
     zone_mgmt: &'a ZoneMgmtHandler<DemoZoneHooks, ZONE_NZ, ZONE_NV, ZONE_NT>,
-) -> impl AsyncMetadata + AsyncHandler + 'a {
+) -> impl DataModelHandler + 'a {
     (
         NODE,
         endpoints::with_eth_sys(
