@@ -87,6 +87,30 @@ pub const VALID_FOREVER: Validity = Validity {
     not_after: 0,  // no expiry (NotAfter sentinel is legitimate)
 };
 
+/// ASN.1 DER `INTEGER` encoding of a 64-bit serial number, per X.690 8.3:
+/// strip leading zero octets so the encoding is minimal, then prepend a single
+/// `0x00` if the top bit of the result is set, so the value stays positive.
+///
+/// Both halves matter to a caller. Without the strip,
+/// [`CertGenerator::validate_serial_number`] rejects the encoding; without the
+/// pad, the certificate states a negative serial number, which RFC 5280 4.1.2.2
+/// forbids.
+pub(crate) fn encode_serial_asn1(serial: u64) -> heapless::Vec<u8, 9> {
+    let serial_bytes_full = serial.to_be_bytes();
+    let start = serial_bytes_full
+        .iter()
+        .position(|&b| b != 0)
+        .unwrap_or(serial_bytes_full.len() - 1);
+    let stripped = &serial_bytes_full[start..];
+
+    let mut vec = heapless::Vec::<u8, 9>::new();
+    if !stripped.is_empty() && (stripped[0] & 0x80) != 0 {
+        vec.push(0).unwrap();
+    }
+    vec.extend_from_slice(stripped).unwrap();
+    vec
+}
+
 /// One-shot Matter-TLV certificate generator writing into a
 /// caller-supplied buffer.
 ///
@@ -385,6 +409,11 @@ impl<'a> CertGenerator<'a> {
         if serial.len() > 1 && serial[0] == 0 && (serial[1] & 0x80) == 0 {
             return Err(ErrorCode::InvalidData.into());
         }
+        // Same rule for the other sign: X.690 8.3.2 forbids the first nine bits
+        // being all ones, i.e. a redundant leading 0xFF on a negative value
+        if serial.len() > 1 && serial[0] == 0xFF && (serial[1] & 0x80) != 0 {
+            return Err(ErrorCode::InvalidData.into());
+        }
         Ok(())
     }
 }
@@ -420,6 +449,37 @@ mod tests {
         assert!(CertGenerator::validate_serial_number(&[]).is_err()); // Empty
         assert!(CertGenerator::validate_serial_number(&[0x00, 0x01]).is_err());
         // Unnecessary leading zero
+        assert!(CertGenerator::validate_serial_number(&[0xFF, 0x80]).is_err());
+        // Unnecessary leading 0xFF
+    }
+
+    #[test]
+    fn test_encode_serial_asn1() {
+        assert_eq!(&encode_serial_asn1(1)[..], &[0x01]);
+        assert_eq!(&encode_serial_asn1(0xFF)[..], &[0x00, 0xFF]); // Sign byte
+        assert_eq!(
+            &encode_serial_asn1(0x00FF_FFFF_FFFF_FFFF)[..],
+            &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF] // Leading zero stripped, sign byte added
+        );
+        assert_eq!(
+            &encode_serial_asn1(0x7FFF_FFFF_FFFF_FFFF)[..],
+            &[0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
+        assert_eq!(
+            &encode_serial_asn1(u64::MAX)[..],
+            &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
+
+        // Whatever it produces, `generate` accepts
+        for serial in [
+            1,
+            0xFF,
+            0x00FF_FFFF_FFFF_FFFF,
+            0x7FFF_FFFF_FFFF_FFFF,
+            u64::MAX,
+        ] {
+            assert!(CertGenerator::validate_serial_number(&encode_serial_asn1(serial)).is_ok());
+        }
     }
 
     /// Test building a self-signed RCAC

@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+* Certificate serial numbers are now always valid DER INTEGERs: the CA generators encode a drawn `u64` rather than using raw random bytes, and `validate_serial_number` rejects a redundant leading `0xFF` as well as a redundant leading `0x00`
 * (Breaking) Update to all RustCrypto crates as well as `rand_core` to their latest versions
 * (Breaking) Update the non-crypto dependencies to their latest majors: `pinned-init`, `strum`, `num-derive` and a few others
 * (Breaking) Retire `EpClMatcher` in favor of `FnMatcher` - a plain `fn(EndptId, ClusterId) -> bool`

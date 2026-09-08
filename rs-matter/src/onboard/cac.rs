@@ -45,7 +45,9 @@
 //! (`RootCaId` / `IcaId`); issuer DN carries the parent's subject ID
 //! (with `is_rcac` set when the parent is the RCAC itself).
 
-use crate::cert::gen::{CertGenerator, CertType, IssuerDN, SubjectDN, Validity};
+use crate::cert::gen::{
+    encode_serial_asn1, CertGenerator, CertType, IssuerDN, SubjectDN, Validity,
+};
 use crate::cert::CertRef;
 use crate::crypto::{
     CanonPkcPublicKey, CanonPkcSecretKey, CanonPkcSecretKeyRef, Crypto, PublicKey, Rng, SecretKey,
@@ -97,8 +99,7 @@ impl<'a> RcacGenerator<'a> {
         let mut rcac_pubkey_canon = CanonPkcPublicKey::new();
         rcac_key.pub_key()?.write_canon(&mut rcac_pubkey_canon)?;
 
-        let mut serial_bytes = [0u8; 8];
-        crypto.rand()?.fill_bytes(&mut serial_bytes);
+        let serial_bytes = encode_serial_asn1(crypto.rand()?.next_u64());
 
         let cert_len = CertGenerator::new(self.buf).generate(
             &crypto,
@@ -180,8 +181,7 @@ impl<'a> IcacGenerator<'a> {
         // RCAC signing key — borrowed only for this build.
         let rcac_signing_key = crypto.secret_key(rcac_privkey)?;
 
-        let mut serial_bytes = [0u8; 8];
-        crypto.rand()?.fill_bytes(&mut serial_bytes);
+        let serial_bytes = encode_serial_asn1(crypto.rand()?.next_u64());
 
         let cert_len = CertGenerator::new(self.buf).generate(
             &crypto,
@@ -257,5 +257,42 @@ mod tests {
         let icac_cert = CertRef::new(TLVElement::new(icac));
         assert_eq!(icac_cert.get_fabric_id().unwrap(), fabric_id);
         let _ = icac_cert.get_ca_id().unwrap();
+    }
+
+    /// The generators draw their serial through [`encode_serial_asn1`] rather
+    /// than using raw random bytes as the DER INTEGER's content octets. Raw
+    /// bytes are a valid encoding only by luck: a redundant leading zero is
+    /// refused by `validate_serial_number`, and a leading octet with the top bit
+    /// set states a negative serial number, which RFC 5280 4.1.2.2 forbids.
+    #[test]
+    fn rcac_serial_is_a_positive_minimal_integer() {
+        let crypto = test_only_crypto();
+
+        for index in 0..8 {
+            let mut buf = [0; MAX_CERT_TLV_AND_ASN1_LEN];
+            let mut generator = RcacGenerator::new(&mut buf);
+            let (_priv, rcac) = generator
+                .generate(&crypto, 0xABCD1234, VALID_FOREVER)
+                .unwrap();
+
+            let serial = TLVElement::new(rcac)
+                .structure()
+                .unwrap()
+                .find_ctx(1)
+                .unwrap()
+                .str()
+                .unwrap();
+
+            // Minimal and positive: a leading 0x00 only where the next octet's
+            // top bit makes one necessary, and otherwise a leading octet below
+            // 0x80. Raw random bytes satisfy neither reliably.
+            let minimal_positive = match serial {
+                [0x00, next, ..] => next & 0x80 != 0,
+                [first, ..] => first & 0x80 == 0,
+                [] => false,
+            };
+
+            assert!(minimal_positive, "cert {index} serial {serial:02x?}");
+        }
     }
 }

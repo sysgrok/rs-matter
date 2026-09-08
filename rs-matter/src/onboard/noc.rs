@@ -36,7 +36,9 @@
 
 use core::num::NonZeroU8;
 
-use crate::cert::gen::{CertGenerator, CertType, IssuerDN, SubjectDN, Validity};
+use crate::cert::gen::{
+    encode_serial_asn1, CertGenerator, CertType, IssuerDN, SubjectDN, Validity,
+};
 use crate::cert::x509::csr::CsrRef;
 use crate::cert::CertRef;
 use crate::crypto::{CanonPkcPublicKey, CanonPkcSecretKeyRef, Crypto, PublicKey, SigningSecretKey};
@@ -168,7 +170,7 @@ impl<'a> NocGenerator<'a> {
 
         let device_pubkey = csr_ref.pubkey()?;
 
-        let serial_bytes_vec = Self::encode_serial_asn1(node_id);
+        let serial_bytes_vec = encode_serial_asn1(node_id);
         let serial_bytes = serial_bytes_vec.as_slice();
 
         // Issuer DN switches on whether we're signing as ICAC or RCAC.
@@ -229,25 +231,6 @@ impl<'a> NocGenerator<'a> {
     /// new fabric members.
     pub fn signing_secret_key(&self) -> CanonPkcSecretKeyRef<'_> {
         self.signing_privkey
-    }
-
-    /// ASN.1 DER `INTEGER` encoding of a 64-bit serial per X.690 -
-    /// strip leading zero bytes, then prepend a single `0x00`
-    /// if the top bit of the result is set (to keep the value positive).
-    fn encode_serial_asn1(serial: u64) -> heapless::Vec<u8, 9> {
-        let serial_bytes_full = serial.to_be_bytes();
-        let start = serial_bytes_full
-            .iter()
-            .position(|&b| b != 0)
-            .unwrap_or(serial_bytes_full.len() - 1);
-        let stripped = &serial_bytes_full[start..];
-
-        let mut vec = heapless::Vec::<u8, 9>::new();
-        if !stripped.is_empty() && (stripped[0] & 0x80) != 0 {
-            vec.push(0).unwrap();
-        }
-        vec.extend_from_slice(stripped).unwrap();
-        vec
     }
 }
 
