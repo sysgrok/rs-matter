@@ -55,7 +55,7 @@ use embassy_time::{Duration, Timer};
 use log::info;
 
 use rs_matter::acl::{AclEntry, AuthMode};
-use rs_matter::crypto::{test_only_crypto, Crypto};
+use rs_matter::crypto::{test_only_crypto, CanonAeadKey, Crypto};
 use rs_matter::dm::clusters::app::on_off::{self, test::TestOnOffDeviceLogic};
 use rs_matter::dm::clusters::basic_info::BasicInfoConfig;
 use rs_matter::dm::clusters::net_comm::DummyNetworks;
@@ -87,7 +87,6 @@ use crate::common::e2e::im::{ReplyProcessor, TestReportDataMsg, TestSubscribeReq
 use crate::common::e2e::test::E2eTest;
 use crate::common::e2e::tlv::TLVTest;
 use crate::common::init_env_logger;
-use crate::{attr_data_path, echo_req, echo_resp};
 
 #[allow(dead_code)]
 mod common;
@@ -131,8 +130,10 @@ enum LossMode {
 }
 
 /// What the transport asked one direction of the link to send.
-#[derive(Default)]
 struct LinkStats {
+    /// Node ID of the node sending over this direction of the link; needed
+    /// to decrypt the packet headers.
+    sender_nodeid: u64,
     /// Packets handed to the link by the transport.
     offered: Cell<u32>,
     /// Packets actually pushed into the pipe, duplicates included.
@@ -151,10 +152,23 @@ struct LinkStats {
 }
 
 impl LinkStats {
+    fn new(sender_nodeid: u64) -> Self {
+        Self {
+            sender_nodeid,
+            offered: Cell::new(0),
+            delivered: Cell::new(0),
+            dropped: Cell::new(0),
+            retransmissions: Cell::new(0),
+            standalone_acks: Cell::new(0),
+            im_messages: Cell::new(0),
+            seen_ctrs: RefCell::new(Vec::new()),
+        }
+    }
+
     fn record(&self, data: &[u8]) {
         self.offered.set(self.offered.get() + 1);
 
-        let Some((ctr, proto_id, opcode)) = decode_hdr(data) else {
+        let Some((ctr, proto_id, opcode)) = decode_hdr(data, self.sender_nodeid) else {
             panic!("Undecodable packet on the link");
         };
 
@@ -180,16 +194,26 @@ impl LinkStats {
     }
 }
 
-/// Decode the plain and protocol headers of a packet on the (unencrypted)
-/// test link: `(message counter, protocol ID, protocol opcode)`.
-fn decode_hdr(data: &[u8]) -> Option<(u32, u16, u8)> {
+/// Decode the plain and protocol headers of a packet sent by `sender_nodeid`
+/// over the test link: `(message counter, protocol ID, protocol opcode)`.
+///
+/// The pre-installed sessions carry no key material, so the packets are
+/// encrypted with an all-zero key.
+fn decode_hdr(data: &[u8], sender_nodeid: u64) -> Option<(u32, u16, u8)> {
     let mut data = data.to_vec();
     let mut pb = ParseBuf::new(data.as_mut_slice());
     let mut hdr = PacketHdr::new();
 
+    let key = CanonAeadKey::new();
+
     hdr.decode_plain_hdr(&mut pb).ok()?;
-    hdr.decode_remaining(test_only_crypto(), None, 0, &mut pb)
-        .ok()?;
+    hdr.decode_remaining(
+        test_only_crypto(),
+        Some(key.reference()),
+        sender_nodeid,
+        &mut pb,
+    )
+    .ok()?;
 
     Some((hdr.plain.ctr, hdr.proto.proto_id, hdr.proto.proto_opcode))
 }
@@ -380,7 +404,7 @@ where
 }
 
 /// Open an exchange on the client's pre-installed session to the device.
-async fn initiate_exchange(client: &Matter<'_>) -> Result<Exchange<'_>, Error> {
+async fn initiate_exchange<'a>(client: &'a Matter<'a>) -> Result<Exchange<'a>, Error> {
     Exchange::initiate(
         client,
         test_only_crypto(),
@@ -528,7 +552,7 @@ fn run_im_scenario(
     add_admin_acl(&device);
 
     let crypto = test_only_crypto();
-    let buffers = MatterBuffers::new();
+    let buffers: MatterBuffers = MatterBuffers::new();
     let state = InteractionModelState::<DummyNetworks, 3, 0>::new(DummyNetworks);
 
     let mut rand = crypto.rand().unwrap();
@@ -543,8 +567,8 @@ fn run_im_scenario(
     let dm = InteractionModel::new(&device, &crypto, &buffers, &handler, &kv, &state);
     let responder = Responder::new_default(&dm);
 
-    let device_stats = LinkStats::default();
-    let client_stats = LinkStats::default();
+    let device_stats = LinkStats::new(DEVICE_NODE_ID);
+    let client_stats = LinkStats::new(CLIENT_NODE_ID);
 
     let device_before = device.transport().counters();
     let client_before = client.transport().counters();
@@ -699,8 +723,8 @@ fn test_standalone_ack_for_unanswered_message() {
 
         let responder = Responder::new("silent", SilentHandler, &device, 0);
 
-        let device_stats = LinkStats::default();
-        let client_stats = LinkStats::default();
+        let device_stats = LinkStats::new(DEVICE_NODE_ID);
+        let client_stats = LinkStats::new(CLIENT_NODE_ID);
 
         let client_before = client.transport().counters();
 
@@ -732,16 +756,19 @@ fn test_standalone_ack_for_unanswered_message() {
                 );
 
                 // Nothing else arrives on the exchange.
-                let mut recv = pin!(exchange.recv());
-                let mut timeout = pin!(Timer::after(Duration::from_millis(500)));
+                {
+                    let mut recv = pin!(exchange.recv());
+                    let mut timeout = pin!(Timer::after(Duration::from_millis(500)));
 
-                match select(&mut recv, &mut timeout).await {
-                    Either::First(rx) => panic!(
-                        "Unexpected message on the exchange: {:?}",
-                        rx.map(|rx| rx.meta())
-                    ),
-                    Either::Second(_) => Ok(()),
+                    if let Either::First(rx) = select(&mut recv, &mut timeout).await {
+                        panic!(
+                            "Unexpected message on the exchange: {:?}",
+                            rx.map(|rx| rx.meta())
+                        );
+                    }
                 }
+
+                Ok(())
             },
         ))
         .unwrap();
@@ -790,8 +817,8 @@ fn test_send_fails_after_max_transmissions() {
 
         let responder = Responder::new("silent", SilentHandler, &device, 0);
 
-        let device_stats = LinkStats::default();
-        let client_stats = LinkStats::default();
+        let device_stats = LinkStats::new(DEVICE_NODE_ID);
+        let client_stats = LinkStats::new(CLIENT_NODE_ID);
 
         futures_lite::future::block_on(run_link(
             &device,
