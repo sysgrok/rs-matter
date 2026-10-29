@@ -1,0 +1,43 @@
+[package]
+name = "rs-matter-im"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Native Rust implementation of the Matter (Smart-Home) ecosystem - the Interaction Model engine"
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["std", "log"]
+std = ["alloc", "rs-matter-error/std", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-im-base/std", "rs-matter-dm-base/std", "rs-matter-node/std"]
+alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc", "rs-matter-node/alloc"]
+# Multicast groups support.
+groups = ["rs-matter-crypto/groups", "rs-matter-node/groups"]
+# Persist accepted subscriptions and resume them across a reboot.
+persistent-subscriptions = []
+defmt = ["dep:defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt", "rs-matter-node/defmt"]
+log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-im-base/log", "rs-matter-dm-base/log", "rs-matter-node/log"]
+
+[dependencies]
+rs-matter-error = { workspace = true }
+rs-matter-utils = { workspace = true }
+rs-matter-tlv = { workspace = true }
+rs-matter-crypto = { workspace = true }
+rs-matter-im-base = { workspace = true }
+rs-matter-dm-base = { workspace = true }
+rs-matter-node = { workspace = true }
+log = { workspace = true, optional = true }
+defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+rs-matter-crypto = { workspace = true, features = ["rustcrypto"] }
+embassy-time-queue-utils = { workspace = true, features = ["generic-queue-64"] }
+futures-lite = { workspace = true }
+
+[lints.rust]
+# `cargo llvm-cov` sets these when measuring coverage (the second one only on nightly)
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(coverage_nightly)'] }

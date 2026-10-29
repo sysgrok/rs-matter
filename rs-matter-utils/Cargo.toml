@@ -1,0 +1,43 @@
+[package]
+name = "rs-matter-utils"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Native Rust implementation of the Matter (Smart-Home) ecosystem - utilities"
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["os", "log"]
+# OS-based (non-baremetal) targets.
+os = ["std", "critical-section/std", "embassy-sync/std", "embassy-time/std"]
+std = ["alloc", "rs-matter-error/std"]
+alloc = ["defmt?/alloc", "rs-matter-error/alloc"]
+# The futures and the shared types are `Send` (and `Sync`), for work-stealing executors.
+send-sync = []
+defmt = ["dep:defmt", "heapless/defmt", "embassy-time/defmt", "rs-matter-error/defmt"]
+log = ["dep:log", "embassy-time/log", "rs-matter-error/log"]
+
+[dependencies]
+rs-matter-error = { workspace = true }
+bitflags = { workspace = true }
+critical-section = { workspace = true }
+embassy-futures = { workspace = true }
+embassy-sync = { workspace = true }
+embassy-time = { workspace = true }
+embedded-io-async = { workspace = true }
+heapless = { workspace = true }
+pinned-init = { workspace = true }
+log = { workspace = true, optional = true }
+defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+futures-lite = { workspace = true }
+
+[lints.rust]
+# `cargo llvm-cov` sets these when measuring coverage (the second one only on nightly)
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(coverage_nightly)'] }

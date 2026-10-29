@@ -198,7 +198,7 @@ first rows. Line counts are hand-written lines in the current code.
 | `rs-matter-im-base` | IM message encoding, protocol constants and opcodes, IDs, `ImTransaction` | 6.9K | tlv | dm-base, dm-clusters, node, im, dm, onboard |
 | `rs-matter-dm-base` | data model metadata (`Node`, `Endpoint`, `Cluster`, ...), access, dataver, `Handler` / `AsyncHandler`, context traits, `Reply`, change notifiers, event writer, `LifecycleOp`, `ImStats`, `ExchangeId`, persistence traits | 6.5K | tlv, im-base, crypto | dm-clusters, node, im, dm, onboard |
 | `rs-matter-dm-clusters` | generated: types, builders, metadata, handler traits, adaptors, client views; owns the codegen `build.rs` | (775K generated) | tlv, im-base, dm-base | dm, onboard |
-| `rs-matter-node` | `Matter` and the node state, transport (exchange, session, MRP, UDP, TCP, BTP, mDNS, OS backends), secure channel, fabrics, ACL, fail-safe, handover, BDX, OTA image, the IM client over `Exchange` | 55K | tlv, crypto, cert, pairing, im-base, dm-base | im, dm, onboard |
+| `rs-matter-node` | `Matter` and the node state, transport (exchange, session, MRP, UDP, TCP, BTP, mDNS, OS backends), secure channel, fabrics, ACL, fail-safe, handover, BDX, OTA image, the IM client over `Exchange`, the PICS JSON output | 55K | tlv, crypto, cert, pairing, im-base, dm-base | im, dm, onboard |
 | `rs-matter-im` | the IM engine: `InteractionModel`, subscriptions, event queue, invoker, path expansion, busy handling, the responders, the context implementations | 12K | tlv, crypto, im-base, dm-base, node | rs-matter |
 | `rs-matter-dm` | all cluster handlers (root endpoint and application), the root endpoint composition, the network commissioning drivers (including NetworkManager, wpa_supplicant and OTBR), `TimeSyncClient` | 60K | tlv, crypto, cert, im-base, dm-base, dm-clusters, node | rs-matter |
 | `rs-matter-onboard` | the commissioner | 1.4K | tlv, crypto, cert, im-base, dm-base, dm-clusters, node | rs-matter |
@@ -314,19 +314,58 @@ it checks quickly once it is in a crate of its own.
 - **Features.** Each crate declares only the features it uses. `defmt` and `log` go on all
   crates. `send-sync` goes on `utils`, and Cargo's feature unification enables it
   everywhere. The sizing features go on `node`, except `kv-blob-store-*` and
-  `large-buffers`, which go on `dm-base`. The crypto backends go on `crypto`. The facade
-  forwards all current features, so existing `Cargo.toml` files keep working.
+  `large-buffers`, which go on `dm-base`. The crypto backends go on `crypto`. A feature of
+  a crate is forwarded to the crates below it which have a feature of the same name. The
+  facade forwards all current features, so existing `Cargo.toml` files keep working;
+  `async-io`, which used to be the implicit feature of an optional dependency, is kept.
+- **Default features.** Each crate has the defaults of the facade, as far as it has those
+  features (e.g. `std` and `log`), so that `cargo test -p <crate>` works. The workspace
+  entries of the crates turn the defaults off, so a crate never enables `std` in another
+  one. The crates whose tests need a crypto backend get `rs-matter-crypto` with
+  `rustcrypto` as a dev-dependency.
+- **Dependencies.** All dependencies, external and internal, are listed in
+  `[workspace.dependencies]` of the root `Cargo.toml`; the crates refer to them with
+  `workspace = true` and add only their features.
+- **Paths.** A crate that was one module (e.g. `tlv`) has that module as its root, and its
+  `crate::tlv::` paths become `crate::`. Each crate imports its dependencies at its root
+  under the names the code already uses (`use rs_matter_tlv as tlv;`), so the
+  `crate::tlv::...` paths elsewhere do not change. Where a former module is split across
+  crates, the crate above has a small module that puts the parts together: the `im`, `dm`
+  and `utils` modules of `rs-matter-node` add the IM client, the test device and the zbus
+  proxies to the re-exported base crates.
 - **Logging macros.** Each crate gets its own copy of `fmt.rs`. A `#[macro_export]` macro
   evaluates `cfg(feature = ...)` in the crate that calls it, so one copy cannot serve all
   crates.
-- **Derive macros.** The `proc_macro_crate` lookup in `rs-matter-macros` learns
-  `rs-matter-tlv`, and keeps the `rs-matter` facade and `crate` as fallbacks.
-- **Codegen paths.** The generated crate re-exports the base crates as `tlv`, `dm`, `im`,
-  `error` and `reexport` modules, so the generated `crate::tlv::...` paths keep working.
-  Only the cross-cluster `crate::dm::clusters::decl::...` paths need a new codegen
-  parameter.
+- **Derive macros.** The `proc_macro_crate` lookup in `rs-matter-macros` looks for
+  `rs-matter-tlv` first, then for the `rs-matter` facade, and falls back to `crate::tlv`.
+  The derives refer to the error type and to the `init` helpers through a hidden
+  `rs_matter_tlv::__private` module, so they only need the path to the TLV crate.
+- **Codegen paths.** The generated crate imports the base crates under the names `tlv`,
+  `dm`, `im`, `error` and `utils`, and has its own `reexport` module, so the generated
+  `crate::tlv::...` paths keep working. The generated clusters import the global types
+  with `use super::globals::*`, which works both in the generated crate and in the old
+  `decl` module, so no new codegen parameter is needed.
 - **Generation at build time.** The generated source is too large for crates.io, so
-  `rs-matter-dm-clusters` keeps generating it from its `build.rs`.
+  `rs-matter-dm-clusters` keeps generating it from its `build.rs`. The build time of the
+  firmware, which `utils::epoch` needs, is captured by a `build.rs` of `rs-matter-utils`.
+- **Coherence.** A crate cannot implement a trait of another crate for a type of a third
+  one, nor add inherent methods to a type of another crate. The conversions from the
+  errors of `zbus` and BlueR move to the error crate, behind features of the same names.
+  The ones from the `domain` (mDNS) and `zeroconf` errors become plain functions used with
+  `map_err`. The inherent methods of the handlers on generated types become extension
+  traits (`NetworkCommissioningStatusMap` and `AttributeValuePairPush` are public, as
+  other modules use them). The TLV methods of `WriteBuf` move into its `TLVWrite` impl.
+- **Tests.** The test helpers that tests of other crates used move next to what they test
+  (`persist::MemKvBlobStore` and `MemKv`, behind `std`), or are written out in those tests
+  (a `Matter` of the test device, the test fabric indices, an ICAC minted with
+  `CertGenerator`). The handlers' tests use the IM engine's event queue through a
+  dev-dependency of `rs-matter-dm` on `rs-matter-im`, and the `pics` test of
+  `rs-matter-node` uses the generated Identify metadata through a dev-dependency on
+  `rs-matter-dm-clusters`; neither is a cycle.
+- **Exported macros.** The root endpoint macros of `rs-matter-dm` expand to
+  `$crate::dm::...` paths, so that crate has a hidden public `dm` module that puts the
+  data model types and its own modules together. The facade re-exports the macros of
+  `rs-matter-dm-base`, `rs-matter-tlv` and `rs-matter-dm` at its root, as before.
 
 ## 9. Order of work
 
@@ -341,7 +380,8 @@ No new crates yet. Each item compiles and passes the tests on its own.
 3. The moves of section 6: the node state, the node's own enums and constants, the drivers,
    and the data model types' links to code above them.
 4. A module-level dependency check that maps each module to its future crate and confirms
-   that the resulting crate graph has no cycles: `xtask/scripts/crate_split_deps.py`.
+   that the resulting crate graph has no cycles. This was a script, removed in step 2,
+   once the crates and their dependencies took over the check.
 
 This step contains all the design decisions and can be reviewed on its own.
 
@@ -349,6 +389,9 @@ This step contains all the design decisions and can be reviewed on its own.
 
 `error`, `utils`, `tlv`, `crypto`, `cert`, `pairing`; then `im-base`, `dm-base`; then
 `dm-clusters` (with `build.rs`); then `node`, `im`, `dm`, `onboard`; the facade last.
+
+`pics` (`Matter::write_pics_json`) went to `node` rather than to `dm`: it adds methods to
+`Matter` and uses only the node and the data model types.
 
 ### Step 3: tooling and measurement
 

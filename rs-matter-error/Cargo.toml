@@ -1,0 +1,39 @@
+[package]
+name = "rs-matter-error"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Native Rust implementation of the Matter (Smart-Home) ecosystem - the error type"
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["std", "log"]
+std = ["alloc"]
+alloc = ["defmt?/alloc"]
+# Capture a backtrace in each error.
+backtrace = []
+# Conversion from the errors of BlueR.
+bluer = ["std", "dep:bluer"]
+# Conversion from the errors of zbus.
+zbus = ["std", "dep:zbus"]
+defmt = ["dep:defmt"]
+log = ["dep:log"]
+
+[dependencies]
+embedded-io-async = { workspace = true }
+num_enum = { workspace = true }
+log = { workspace = true, optional = true }
+defmt = { workspace = true, optional = true }
+zbus = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { workspace = true, optional = true }
+
+[lints.rust]
+# `cargo llvm-cov` sets these when measuring coverage (the second one only on nightly)
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(coverage_nightly)'] }

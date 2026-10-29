@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+* Breaking: `rs-matter` is split into the crates `rs-matter-error`, `-utils`, `-tlv`, `-crypto`, `-cert`, `-pairing`, `-im-base`, `-dm-base`, `-dm-clusters` (the generated clusters), `-node`, `-im`, `-dm` and `-onboard`, so that an edit outside of the generated code no longer re-checks it (#559); `rs-matter` re-exports them under the existing paths and keeps its features
+  * Breaking: the features that were the implicit features of optional dependencies are gone, except `async-io`
+  * Breaking: the `NetworkCommissioningStatusEnum::map*` functions are in the `net_comm::NetworkCommissioningStatusMap` trait, and `AttributeValuePairStructArrayBuilder::push_u8` / `push_u16` in the `scenes::AttributeValuePairPush` trait
+  * Breaking: `WriteBuf::str_cb` and `WriteBuf::utf8_cb` are methods of `TLVWrite` only
+  * New: `persist::MemKvBlobStore` and `persist::MemKv`, an in-memory store for tests (with `std`)
 * Breaking: node types that lived in cluster handler modules moved to modules of their own and use their own enums instead of the generated ones; the handler modules re-export them
   * `basic_info`: `BasicInfoConfig`, `BasicInfoSettings` and their parts, with new `ProductFinish`, `ProductColor` and `RegulatoryLocationType`; the area type of `DeviceLocation` and `DeviceLocationConfig` is its `u8` value
   * `rtc`: `Rtc` and `TrustedTimeSource`, with new `TimeGranularity` and `TimeSource`

@@ -1,0 +1,33 @@
+[package]
+name = "rs-matter-dm-clusters"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Native Rust implementation of the Matter (Smart-Home) ecosystem - the clusters generated from the Matter IDL"
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["std", "log"]
+std = ["alloc", "rs-matter-error/std", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-im-base/std", "rs-matter-dm-base/std"]
+alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc"]
+defmt = ["dep:defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt"]
+log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-im-base/log", "rs-matter-dm-base/log"]
+
+[dependencies]
+rs-matter-error = { workspace = true }
+rs-matter-utils = { workspace = true }
+rs-matter-tlv = { workspace = true }
+rs-matter-im-base = { workspace = true }
+rs-matter-dm-base = { workspace = true }
+bitflags = { workspace = true }
+strum = { workspace = true }
+log = { workspace = true, optional = true }
+defmt = { workspace = true, optional = true }
+
+[build-dependencies]
+rs-matter-codegen = { workspace = true }
