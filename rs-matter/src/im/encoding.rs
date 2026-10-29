@@ -29,7 +29,6 @@ use num_derive::FromPrimitive;
 
 use crate::error::{Error, ErrorCode};
 use crate::tlv::{FromTLV, TLVElement, TLVTag, TLVWrite, ToTLV, TLV};
-use crate::transport::exchange::MessageMeta;
 
 pub use attr::*;
 pub use event::*;
@@ -37,6 +36,7 @@ pub use invoke::*;
 pub use invoke_builder::*;
 pub use status::*;
 pub use timed::*;
+pub use transaction::*;
 pub use types::*;
 
 mod attr;
@@ -45,11 +45,8 @@ mod invoke;
 mod invoke_builder;
 mod status;
 mod timed;
+mod transaction;
 pub(crate) mod types;
-
-/// The buffer type used by the Interaction Model for RX/TX payloads. Aliases the
-/// central [`Buffer`](crate::transport::exchange::Buffer).
-pub type IMBuffer = crate::transport::exchange::Buffer;
 
 /// Interaction Model ID as per the Matter Core spec
 pub const PROTO_ID_INTERACTION_MODEL: u16 = 0x01;
@@ -217,29 +214,11 @@ pub enum OpCode {
 }
 
 impl OpCode {
-    /// Return the opcode as a `MessageMeta` structure, which contains
-    /// the protocol ID, opcode, and reliability information.
-    ///
-    /// Reliability is set to `true` as all IM messages are reliable.
-    pub const fn meta(&self) -> MessageMeta {
-        MessageMeta {
-            proto_id: PROTO_ID_INTERACTION_MODEL,
-            proto_opcode: *self as u8,
-            reliable: true,
-        }
-    }
-
     /// Return `true` if the opcode payload is in TLV format.
     ///
     /// Currently, the payload of all IM opcodes except `Reserved` is in TLV format.
     pub const fn is_tlv(&self) -> bool {
         !matches!(self, Self::Reserved)
-    }
-}
-
-impl From<OpCode> for MessageMeta {
-    fn from(opcode: OpCode) -> Self {
-        opcode.meta()
     }
 }
 
@@ -311,7 +290,7 @@ mod tests {
     use crate::tlv::{FromTLV, TLVElement, TLVTag, ToTLV};
     use crate::utils::storage::WriteBuf;
 
-    use super::{GenericPath, IMStatusCode, OpCode, PROTO_ID_INTERACTION_MODEL};
+    use super::{GenericPath, IMStatusCode, OpCode};
 
     #[test]
     fn generic_path_wildcard_helpers() {
@@ -373,10 +352,6 @@ mod tests {
             IMStatusCode::Failure
         );
 
-        let meta = OpCode::ReadRequest.meta();
-        assert_eq!(meta.proto_id, PROTO_ID_INTERACTION_MODEL);
-        assert_eq!(meta.proto_opcode, 2);
-        assert!(meta.reliable);
         assert!(OpCode::ReadRequest.is_tlv());
         assert!(!OpCode::Reserved.is_tlv());
     }

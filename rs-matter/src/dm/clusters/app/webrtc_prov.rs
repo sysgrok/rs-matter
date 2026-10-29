@@ -88,11 +88,12 @@ use crate::dm::{
 use crate::error::{Error, ErrorCode};
 use crate::tlv::{Nullable, TLVArray, TLVBuilderParent};
 use crate::transport::exchange::Exchange;
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::utils::futures::{select, Either};
 use crate::utils::storage::{String, Vec};
 use crate::utils::sync::blocking::Mutex;
 use crate::utils::sync::{MaybeSend, MaybeSendSync, Notification};
-use crate::with;
+use crate::{with, Matter};
 
 use super::super::decl::web_rtc_transport_provider as decl;
 use super::super::decl::web_rtc_transport_requestor::WebRtcTransportRequestorClient;
@@ -518,6 +519,7 @@ struct SessionEntry {
 ///
 /// See the [module documentation](self) for the architecture and usage.
 pub struct WebRtcProvHandler<
+    'a,
     H: WebRtcHooks,
     const N_SESSIONS: usize,
     const SDP_LEN: usize,
@@ -526,6 +528,7 @@ pub struct WebRtcProvHandler<
     const MAX_CAND: usize,
 > {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     endpoint_id: EndptId,
     hooks: H,
     sessions: Mutex<RefCell<Vec<SessionEntry, N_SESSIONS>>>,
@@ -537,13 +540,14 @@ pub struct WebRtcProvHandler<
 }
 
 impl<
+        'a,
         H: WebRtcHooks,
         const N_SESSIONS: usize,
         const SDP_LEN: usize,
         const OUT_LEN: usize,
         const CAND_LEN: usize,
         const MAX_CAND: usize,
-    > WebRtcProvHandler<H, N_SESSIONS, SDP_LEN, OUT_LEN, CAND_LEN, MAX_CAND>
+    > WebRtcProvHandler<'a, H, N_SESSIONS, SDP_LEN, OUT_LEN, CAND_LEN, MAX_CAND>
 {
     /// Cluster metadata exposed to the data-model dispatcher.
     pub const CLUSTER: Cluster<'static> = decl::FULL_CLUSTER
@@ -557,10 +561,17 @@ impl<
                 | decl::CommandId::EndSession
         ));
 
-    /// Construct a new handler.
-    pub const fn new(dataver: Dataver, endpoint_id: EndptId, hooks: H) -> Self {
+    /// Construct a new handler, opening the exchanges to the requestors over
+    /// `matter`.
+    pub const fn new(
+        dataver: Dataver,
+        matter: &'a Matter<'a>,
+        endpoint_id: EndptId,
+        hooks: H,
+    ) -> Self {
         Self {
             dataver,
+            matter,
             endpoint_id,
             hooks,
             sessions: Mutex::new(RefCell::new(Vec::new())),
@@ -568,6 +579,13 @@ impl<
             removed_signal: Notification::new(),
             next_id: Mutex::new(Cell::new(1)),
         }
+    }
+
+    /// The node ID of the peer that invoked a command.
+    fn peer_node_id(&self, ctx: &impl InvokeContext) -> Result<u64, Error> {
+        ctx.exchange_id()
+            .peer_node_id(self.matter)?
+            .ok_or(ErrorCode::Invalid.into())
     }
 
     /// Wrap in the generic async adaptor for registration with a
@@ -755,7 +773,7 @@ impl<
         // A WebRTC peer session is always on a real (non-zero) fabric.
         let fab_idx = core::num::NonZeroU8::new(session.fab_idx).ok_or(ErrorCode::Invalid)?;
         let exchange =
-            Exchange::initiate(ctx.matter(), ctx.crypto(), fab_idx, session.peer_node_id).await?;
+            Exchange::initiate(self.matter, ctx.crypto(), fab_idx, session.peer_node_id).await?;
 
         // Single-shot client-trait invoke for all four commands. The
         // codegen `WebRtcTransportRequestorClient` methods bake in
@@ -856,7 +874,7 @@ impl<
         const CAND_LEN: usize,
         const MAX_CAND: usize,
     > decl::ClusterAsyncHandler
-    for WebRtcProvHandler<H, N_SESSIONS, SDP_LEN, OUT_LEN, CAND_LEN, MAX_CAND>
+    for WebRtcProvHandler<'_, H, N_SESSIONS, SDP_LEN, OUT_LEN, CAND_LEN, MAX_CAND>
 {
     const CLUSTER: Cluster<'static> = Self::CLUSTER;
 
@@ -959,7 +977,7 @@ impl<
     ) -> Result<P, Error> {
         let cmd = ctx.cmd();
         let fab_idx = cmd.fab_idx;
-        let peer_node_id = exchange_peer_node_id(ctx.exchange())?;
+        let peer_node_id = self.peer_node_id(&ctx)?;
 
         let params = OfferParams {
             stream_usage: request.stream_usage()?,
@@ -1011,7 +1029,7 @@ impl<
     ) -> Result<P, Error> {
         let cmd = ctx.cmd();
         let fab_idx = cmd.fab_idx;
-        let peer_node_id = exchange_peer_node_id(ctx.exchange())?;
+        let peer_node_id = self.peer_node_id(&ctx)?;
 
         let sdp = request.sdp()?;
         if sdp.len() > SDP_LEN {
@@ -1071,7 +1089,7 @@ impl<
     ) -> Result<(), Error> {
         let cmd = ctx.cmd();
         let fab_idx = cmd.fab_idx;
-        let peer_node_id = exchange_peer_node_id(ctx.exchange())?;
+        let peer_node_id = self.peer_node_id(&ctx)?;
 
         let session_id = request.web_rtc_session_id()?;
         let sdp = request.sdp()?;
@@ -1105,7 +1123,7 @@ impl<
     ) -> Result<(), Error> {
         let cmd = ctx.cmd();
         let fab_idx = cmd.fab_idx;
-        let peer_node_id = exchange_peer_node_id(ctx.exchange())?;
+        let peer_node_id = self.peer_node_id(&ctx)?;
 
         let session_id = request.web_rtc_session_id()?;
         let session = self
@@ -1127,7 +1145,7 @@ impl<
     ) -> Result<(), Error> {
         let cmd = ctx.cmd();
         let fab_idx = cmd.fab_idx;
-        let peer_node_id = exchange_peer_node_id(ctx.exchange())?;
+        let peer_node_id = self.peer_node_id(&ctx)?;
 
         let session_id = request.web_rtc_session_id()?;
         let reason = request.reason()?;
@@ -1150,13 +1168,6 @@ impl<
 // ──────────────────────────────────────────────────────────────────────
 
 /// Extract the peer node ID from an incoming exchange's session state.
-fn exchange_peer_node_id(exchange: &Exchange<'_>) -> Result<u64, Error> {
-    exchange.with_state(|state| {
-        let sess = exchange.id().session(&mut state.sessions);
-        sess.get_peer_node_id().ok_or(ErrorCode::Invalid.into())
-    })
-}
-
 /// Convert `Option<u16>` (internal storage) into `Option<Nullable<u16>>`
 /// suitable for response builders that treat the field as BOTH optional
 /// and nullable. We always emit the field (`Some(_)`); `None` stream ID

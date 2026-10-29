@@ -379,11 +379,13 @@ mod tests {
             discriminator: 3840,
         };
 
-        let payload = QrPayload::new_from_basic_info(
+        let payload = QrPayload::new(
             DiscoveryCapabilities::BLE,
             CommFlowType::Standard,
             comm_data,
-            &TEST_DEV_DET,
+            TEST_DEV_DET.vid,
+            TEST_DEV_DET.pid,
+            TEST_DEV_DET.serial_no,
             super::super::no_optional_data,
         );
 

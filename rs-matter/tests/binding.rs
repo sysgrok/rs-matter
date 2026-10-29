@@ -181,6 +181,7 @@ const SWITCH_NODE: Node<'static> = Node {
 };
 
 fn switch_data_model<'a>(
+    matter: &'a Matter<'a>,
     mut rand: impl Rng + Copy,
     bindings: &'a Bindings<MAX_BINDINGS>,
 ) -> impl DataModel + 'a {
@@ -188,7 +189,7 @@ fn switch_data_model<'a>(
         SWITCH_NODE,
         endpoints::EthSysHandlerBuilder::new()
             .netif_diag(&UnixNetifs)
-            .build(rand)
+            .build(matter, rand)
             .chain(
                 |e, c| e == SWITCH_ENDPOINT && c == desc::DescHandler::CLUSTER.id,
                 Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
@@ -223,6 +224,7 @@ const LIGHT_NODE: Node<'static> = Node {
 };
 
 fn light_data_model<'a, OH: OnOffHooks>(
+    matter: &'a Matter<'a>,
     mut rand: impl Rng + Copy,
     on_off: &'a on_off::OnOffHandler<'a, OH, on_off::NoLevelControl>,
 ) -> impl DataModel + 'a {
@@ -230,14 +232,14 @@ fn light_data_model<'a, OH: OnOffHooks>(
         LIGHT_NODE,
         endpoints::EthSysHandlerBuilder::new()
             .netif_diag(&UnixNetifs)
-            .build(rand)
+            .build(matter, rand)
             .chain(
                 |e, c| e == LIGHT_ENDPOINT && c == desc::DescHandler::CLUSTER.id,
                 Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
             )
             .chain(
                 |e, c| e == LIGHT_ENDPOINT && c == groups::GroupsHandler::CLUSTER.id,
-                Async(GroupsHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                Async(GroupsHandler::new(Dataver::new_rand(&mut rand), matter).adapt()),
             )
             .chain(
                 |e, c| e == LIGHT_ENDPOINT && c == TestOnOffDeviceLogic::CLUSTER.id,
@@ -287,7 +289,7 @@ async fn run_test() -> Result<(), Error> {
         a_matter,
         &a_crypto,
         a_buffers,
-        switch_data_model(a_rand, &bindings),
+        switch_data_model(a_matter, a_rand, &bindings),
         &a_kv,
         a_state,
     );
@@ -332,7 +334,7 @@ async fn run_test() -> Result<(), Error> {
         b_matter,
         &b_crypto,
         b_buffers,
-        light_data_model(b_rand, &b_on_off),
+        light_data_model(b_matter, b_rand, &b_on_off),
         &b_kv,
         b_state,
     );

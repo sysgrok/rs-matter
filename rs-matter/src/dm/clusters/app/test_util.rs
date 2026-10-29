@@ -19,9 +19,10 @@
 
 use core::cell::RefCell;
 
+use crate::dm::EventTLVWrite;
 use crate::dm::{AttrChangeNotifier, AttrId, ClusterId, EndptId, EventEmitter, EventId};
 use crate::error::Error;
-use crate::im::events::{EventTLVWrite, Events};
+use crate::im::events::Events;
 use crate::im::{EventData, EventNumber, EventPriority};
 use crate::persist::{DummyKvBlobStore, SharedKvBlobStore};
 use crate::utils::storage::Vec;

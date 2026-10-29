@@ -751,7 +751,7 @@ impl net_comm::NetCtl for NoopWirelessNetCtl {
     }
 
     async fn connect(&self, creds: &WirelessCreds<'_>) -> Result<(), NetCtlError> {
-        Ok(creds.check_match(self.0)?)
+        Ok(self.0.check_creds(creds)?)
     }
 }
 

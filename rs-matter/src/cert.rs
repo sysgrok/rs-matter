@@ -21,9 +21,9 @@ use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
 use crate::crypto::{Crypto, PublicKey};
-use crate::dm::clusters::time_sync::UtcTime;
 use crate::error::{Error, ErrorCode};
 use crate::tlv::{FromTLV, Octets, TLVArray, TLVElement, TLVList, ToTLV};
+use crate::utils::epoch::UtcTime;
 use crate::utils::epoch::MATTER_CERT_DOESNT_EXPIRE;
 use crate::utils::iter::TryFindIterator;
 use crate::utils::storage::String;
@@ -1182,9 +1182,9 @@ pub trait CertConsumer {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crate::crypto::test_only_crypto;
-    use crate::dm::clusters::time_sync::UtcTime;
     use crate::error::ErrorCode;
     use crate::tlv::{FromTLV, TLVElement, TagType, ToTLV};
+    use crate::utils::epoch::UtcTime;
     use crate::utils::storage::{Vec, WriteBuf};
 
     use super::CertRef;

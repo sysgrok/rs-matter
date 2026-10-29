@@ -19,32 +19,37 @@
 
 use core::num::NonZeroU8;
 
-use crate::acl::{self, AclEntry, AuthMode, MAX_ACL_ENTRIES_PER_FABRIC};
+use crate::acl::{
+    self, Accessor, AclEntry, AuthMode, AuxiliaryType, Target, MAX_ACL_ENTRIES_PER_FABRIC,
+};
 use crate::dm::endpoints::ROOT_ENDPOINT_ID;
 use crate::dm::{
     ArrayAttributeRead, ArrayAttributeWrite, AttrDetails, Cluster, Dataver, HandlerContext,
-    InvokeContext, NodeId, ReadContext, WriteContext,
+    InvokeContext, NodeId, Privilege, ReadContext, WriteContext,
 };
 use crate::error::{Error, ErrorCode};
 use crate::fabric::{Fabric, FabricPersist, Fabrics};
 use crate::tlv::{Nullable, TLVArray, TLVBuilderParent};
-use crate::utils::init::stack_try_pin_init;
+use crate::transport::exchange::ExchangeIdExt as _;
+use crate::utils::init::{stack_try_pin_init, Init, IntoFallibleInit};
 use crate::utils::storage::Vec;
-use crate::with;
+use crate::{with, Matter};
 
 pub use crate::dm::clusters::decl::access_control::*;
 
 /// The system implementation of a handler for the Access Control Matter cluster.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct AclHandler {
+pub struct AclHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
 }
 
-impl AclHandler {
-    /// Create a new instance of `AclHandler` with the given `dataver`
-    pub const fn new(dataver: Dataver) -> Self {
-        Self { dataver }
+impl<'a> AclHandler<'a> {
+    /// Create a new instance of `AclHandler` with the given `dataver`,
+    /// serving the access control lists of `matter`
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>) -> Self {
+        Self { dataver, matter }
     }
 
     /// Adapt the handler instance to the generic `rs-matter` `Handler` trait
@@ -71,8 +76,12 @@ impl AclHandler {
         match builder {
             ArrayAttributeRead::ReadAll(mut builder) => {
                 for (fab_idx, entry) in acls {
-                    builder =
-                        entry.read_into(attr.fab_idx, Some(fab_idx.get()), builder.push()?)?;
+                    builder = acl_entry_read_into(
+                        entry,
+                        attr.fab_idx,
+                        Some(fab_idx.get()),
+                        builder.push()?,
+                    )?;
                 }
 
                 builder.end()
@@ -82,7 +91,7 @@ impl AclHandler {
                     return Err(ErrorCode::ConstraintError.into());
                 };
 
-                entry.read_into(attr.fab_idx, Some(fab_idx.get()), builder)
+                acl_entry_read_into(entry, attr.fab_idx, Some(fab_idx.get()), builder)
             }
             ArrayAttributeRead::ReadNone(builder) => builder.end(),
         }
@@ -109,7 +118,7 @@ impl AclHandler {
                     }
                     let entry = entry?;
                     // Init a dummy to propagate failures for bad inputs
-                    stack_try_pin_init!(let _processed =? AclEntry::init_with(fabric.fab_idx(), &entry));
+                    stack_try_pin_init!(let _processed =? acl_entry_init(fabric.fab_idx(), &entry));
                 }
 
                 // Now add everything once we know all are valid
@@ -118,15 +127,14 @@ impl AclHandler {
                     // unwrap! calls below can't fail because we already checked that the entry is well-formed
                     // and the length of the list is within the limit
                     let entry = unwrap!(entry);
-                    unwrap!(fabric.acl_add_init(AclEntry::init_with(fabric.fab_idx(), &entry)));
+                    unwrap!(fabric.acl_add_init(acl_entry_init(fabric.fab_idx(), &entry)));
                 }
             }
             ArrayAttributeWrite::Add(entry) => {
-                fabric.acl_add_init(AclEntry::init_with(fabric.fab_idx(), &entry))?;
+                fabric.acl_add_init(acl_entry_init(fabric.fab_idx(), &entry))?;
             }
             ArrayAttributeWrite::Update(index, entry) => {
-                fabric
-                    .acl_update_init(index as _, AclEntry::init_with(fabric.fab_idx(), &entry))?;
+                fabric.acl_update_init(index as _, acl_entry_init(fabric.fab_idx(), &entry))?;
             }
             ArrayAttributeWrite::Remove(index) => {
                 fabric.acl_remove(index as _)?;
@@ -188,7 +196,7 @@ impl AclHandler {
     }
 }
 
-impl ClusterHandler for AclHandler {
+impl ClusterHandler for AclHandler<'_> {
     const CLUSTER: Cluster<'static> = FULL_CLUSTER.with_attrs(with!(required)).with_cmds(with!());
 
     fn dataver(&self) -> u32 {
@@ -207,8 +215,9 @@ impl ClusterHandler for AclHandler {
             AccessControlEntryStructBuilder<P>,
         >,
     ) -> Result<P, Error> {
-        ctx.exchange()
-            .with_state(|state| self.acl(&state.fabrics, ctx.attr(), builder))
+        ctx.exchange_id().with_state(self.matter, |state| {
+            self.acl(&state.fabrics, ctx.attr(), builder)
+        })
     }
 
     fn auxiliary_acl<P: TLVBuilderParent>(
@@ -225,7 +234,7 @@ impl ClusterHandler for AclHandler {
         // and the attribute is an empty list.
         #[cfg(feature = "groups")]
         {
-            ctx.exchange().with_state(|state| {
+            ctx.exchange_id().with_state(self.matter, |state| {
                 let attr = ctx.attr();
 
                 // One synthesized entry per (fabric, aux-flagged group,
@@ -314,7 +323,7 @@ impl ClusterHandler for AclHandler {
     ) -> Result<(), Error> {
         let mut persist = FabricPersist::new(ctx.kv());
 
-        let accessor = ctx.accessor()?;
+        let accessor = Accessor::for_operation(&ctx, self.matter)?;
         let admin_node_id: Nullable<u64> = match accessor.peer_node_id() {
             Some(id) => Nullable::some(id),
             None => Nullable::none(),
@@ -332,7 +341,7 @@ impl ClusterHandler for AclHandler {
         // matter state lock so that we can compare the *old* and *new* ACL
         // contents and produce one event per entry change. `Events::push` (used
         // by the emit path) takes its own independent lock, so this is safe.
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             match value {
@@ -511,12 +520,205 @@ where
         // `read_into` populates the full `AccessControlEntryStruct` for the
         // requested fabric. We pass `fab_idx == fab_idx` so that all
         // fabric-sensitive fields are included in the event payload.
-        let parent = entry.read_into(fab_idx, Some(fab_idx), inner)?;
+        let parent = acl_entry_read_into(entry, fab_idx, Some(fab_idx), inner)?;
 
         parent.fabric_index(Some(fab_idx))?.end()
     })?;
 
     Ok(())
+}
+
+/// Return an initializer for an ACL entry of the fabric `fab_idx`, from an
+/// entry written to the `ACL` attribute
+fn acl_entry_init<'a>(
+    fab_idx: NonZeroU8,
+    entry: &'a AccessControlEntryStruct<'a>,
+) -> impl Init<AclEntry, Error> + 'a {
+    AclEntry::init(Some(fab_idx), Privilege::empty(), AuthMode::Pase)
+        .into_fallible()
+        .chain(|e| {
+            let auth_mode = entry.auth_mode().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
+            let privilege = entry.privilege().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
+            let subjects = entry.subjects().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
+            let targets = entry.targets().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
+            let auxiliary_type = entry.auxiliary_type().map_err(|_| ErrorCode::ConstraintError)?;
+
+            // Per the Matter Core spec, the `AuxiliaryType` field SHALL
+            // NOT be present in entries in the (writable) `ACL`
+            // attribute - it is reserved for the server-generated
+            // entries in `AuxiliaryACL`.
+            if auxiliary_type.is_some() {
+                Err(ErrorCode::ConstraintError)?;
+            }
+
+            if
+                // As per spec, PASE auth mode is reserved for future use
+                matches!(auth_mode, AccessControlEntryAuthModeEnum::PASE)
+                // As per spec, Group auth mode cannot have Admin privilege
+                || matches!(auth_mode, AccessControlEntryAuthModeEnum::Group) && matches!(privilege, AccessControlEntryPrivilegeEnum::Administer)
+            {
+                Err(ErrorCode::ConstraintError)?;
+            }
+
+            e.set_privilege(privilege_from_acl(privilege));
+            e.set_auth_mode(auth_mode_from_acl(auth_mode));
+
+            // The subjects and the targets start as null, and become non-null
+            // only on the first incoming subject or target, so that empty
+            // arrays keep them null. This is what the YAML tests expect
+
+            if let Some(subjects) = subjects.into_option() {
+                for subject in subjects {
+                    let subject = subject?;
+
+                    if matches!(auth_mode, AccessControlEntryAuthModeEnum::CASE) && !acl::is_node(subject) && !acl::is_noc_cat(subject) {
+                        // As per spec, CASE auth mode only allows node ids and NOC CATs as subjects
+                        Err(ErrorCode::ConstraintError)?;
+                    }
+
+                    if matches!(auth_mode, AccessControlEntryAuthModeEnum::Group) {
+                        // Per Matter Core spec: for Group auth mode, the
+                        // subject SHALL be a valid 16-bit Group ID. Group ID 0 is reserved
+                        // and MUST NOT be used; values larger than `u16::MAX` are also invalid.
+                        if subject == 0 || subject > u16::MAX as u64 {
+                            Err(ErrorCode::ConstraintError)?;
+                        }
+                    }
+
+                    // As per spec, on too many subjects we should return a FAILURE status code
+                    // `ErrorCode::BufferTooSmall` translates to a generic FAILURE status code
+                    e.add_subject(subject)
+                        .map_err(|_| ErrorCode::BufferTooSmall)?;
+                }
+            }
+
+            if let Some(targets) = targets.into_option() {
+                for target in targets {
+                    let target = target?;
+
+                    // Matter Core spec (AccessControlTargetStruct):
+                    // - At least one of cluster, endpoint or deviceType SHALL be present.
+                    // - If endpoint is present, deviceType SHALL NOT be present (and vice
+                    //   versa). cluster may be combined with either endpoint or deviceType.
+                    let has_endpoint = target.endpoint()?.is_some();
+                    let has_cluster = target.cluster()?.is_some();
+                    let has_device_type = target.device_type()?.is_some();
+
+                    if (!has_endpoint && !has_cluster && !has_device_type)
+                        || (has_endpoint && has_device_type)
+                    {
+                        Err(ErrorCode::ConstraintError)?;
+                    }
+
+                    // As per spec, on too many targets we should return a FAILURE status code
+                    // `ErrorCode::BufferTooSmall` translates to a generic FAILURE status code
+                    e.add_target(Target::new(
+                            target.endpoint()?.into_option(),
+                            target.cluster()?.into_option(),
+                            target.device_type()?.into_option(),
+                        ))
+                        .map_err(|_| ErrorCode::BufferTooSmall)?;
+                }
+            }
+
+            Ok(())
+        })
+}
+
+/// Write an ACL entry into an `AccessControlEntryStruct` builder
+fn acl_entry_read_into<P: TLVBuilderParent>(
+    entry: &AclEntry,
+    accessing_fab_idx: u8,
+    fab_idx: Option<u8>,
+    builder: AccessControlEntryStructBuilder<P>,
+) -> Result<P, Error> {
+    let same_fab_idx = Some(accessing_fab_idx) == fab_idx;
+
+    builder
+        .privilege(same_fab_idx.then(|| privilege_to_acl(entry.privilege())))?
+        .auth_mode(same_fab_idx.then(|| auth_mode_to_acl(entry.auth_mode())))?
+        .subjects()?
+        .with_some_if(same_fab_idx, |builder| {
+            builder.with_non_null(entry.subjects(), |subjects, mut builder| {
+                for subject in *subjects {
+                    builder = builder.push(subject)?;
+                }
+
+                builder.end()
+            })
+        })?
+        .targets()?
+        .with_some_if(same_fab_idx, |builder| {
+            builder.with_non_null(entry.targets(), |targets, mut builder| {
+                for target in *targets {
+                    builder = builder
+                        .push()?
+                        .cluster(Nullable::new(target.cluster))?
+                        .endpoint(Nullable::new(target.endpoint))?
+                        .device_type(Nullable::new(target.device_type))?
+                        .end()?;
+                }
+
+                builder.end()
+            })
+        })?
+        .auxiliary_type(entry.auxiliary_type().map(auxiliary_type_to_acl))?
+        .fabric_index(fab_idx)?
+        .end()
+}
+
+/// Convert a privilege of the Access Control cluster to a [`Privilege`]
+fn privilege_from_acl(privilege: AccessControlEntryPrivilegeEnum) -> Privilege {
+    match privilege {
+        AccessControlEntryPrivilegeEnum::View => Privilege::VIEW,
+        AccessControlEntryPrivilegeEnum::ProxyView => Privilege::PROXYVIEW,
+        AccessControlEntryPrivilegeEnum::Operate => Privilege::OPERATE,
+        AccessControlEntryPrivilegeEnum::Manage => Privilege::MANAGE,
+        AccessControlEntryPrivilegeEnum::Administer => Privilege::ADMIN,
+    }
+}
+
+/// Convert a [`Privilege`] to a privilege of the Access Control cluster
+fn privilege_to_acl(privilege: Privilege) -> AccessControlEntryPrivilegeEnum {
+    if privilege.contains(Privilege::A) {
+        AccessControlEntryPrivilegeEnum::Administer
+    } else if privilege.contains(Privilege::M) {
+        AccessControlEntryPrivilegeEnum::Manage
+    } else if privilege.contains(Privilege::O) {
+        AccessControlEntryPrivilegeEnum::Operate
+    } else if privilege.contains(Privilege::V) {
+        AccessControlEntryPrivilegeEnum::View
+    } else if privilege.contains(Privilege::P) {
+        AccessControlEntryPrivilegeEnum::ProxyView
+    } else {
+        unreachable!()
+    }
+}
+
+/// Convert an auth mode of the Access Control cluster to an [`AuthMode`]
+fn auth_mode_from_acl(auth_mode: AccessControlEntryAuthModeEnum) -> AuthMode {
+    match auth_mode {
+        AccessControlEntryAuthModeEnum::PASE => AuthMode::Pase,
+        AccessControlEntryAuthModeEnum::CASE => AuthMode::Case,
+        AccessControlEntryAuthModeEnum::Group => AuthMode::Group,
+    }
+}
+
+/// Convert an [`AuthMode`] to an auth mode of the Access Control cluster
+fn auth_mode_to_acl(auth_mode: AuthMode) -> AccessControlEntryAuthModeEnum {
+    match auth_mode {
+        AuthMode::Pase => AccessControlEntryAuthModeEnum::PASE,
+        AuthMode::Case => AccessControlEntryAuthModeEnum::CASE,
+        AuthMode::Group => AccessControlEntryAuthModeEnum::Group,
+    }
+}
+
+/// Convert an [`AuxiliaryType`] to an auxiliary type of the Access Control cluster
+fn auxiliary_type_to_acl(auxiliary_type: AuxiliaryType) -> AccessControlAuxiliaryTypeEnum {
+    match auxiliary_type {
+        AuxiliaryType::System => AccessControlAuxiliaryTypeEnum::System,
+        AuxiliaryType::Groupcast => AccessControlAuxiliaryTypeEnum::Groupcast,
+    }
 }
 
 #[cfg(test)]
@@ -553,7 +755,8 @@ mod tests {
         // Add fabric with ID 1
         unwrap!(fabrics.add_with_post_init(|_| Ok(())));
 
-        let acl = AclHandler::new(Dataver::new(0));
+        let matter = crate::test::test_matter();
+        let acl = AclHandler::new(Dataver::new(0), &matter);
 
         let new = AclEntry::new(Some(FAB_2), Privilege::VIEW, AuthMode::Case);
 
@@ -599,7 +802,8 @@ mod tests {
                 .acl_add(i.clone())
                 .unwrap();
         }
-        let acl = AclHandler::new(Dataver::new(0));
+        let matter = crate::test::test_matter();
+        let acl = AclHandler::new(Dataver::new(0), &matter);
 
         let new = AclEntry::new(Some(FAB_2), Privilege::VIEW, AuthMode::Case);
         new.to_tlv(&TLVTag::Anonymous, &mut tw).unwrap();
@@ -651,7 +855,8 @@ mod tests {
                 .acl_add(i.clone())
                 .unwrap();
         }
-        let acl = AclHandler::new(Dataver::new(0));
+        let matter = crate::test::test_matter();
+        let acl = AclHandler::new(Dataver::new(0), &matter);
 
         // Test: delete Fabric 1's index 0
         acl_remove(&acl, &mut fabrics, 0, FAB_1);
@@ -694,7 +899,8 @@ mod tests {
                 .acl_add(i)
                 .unwrap();
         }
-        let acl = AclHandler::new(Dataver::new(0));
+        let matter = crate::test::test_matter();
+        let acl = AclHandler::new(Dataver::new(0), &matter);
 
         // Test 1, all 3 entries are read in the response without fabric filtering
         {

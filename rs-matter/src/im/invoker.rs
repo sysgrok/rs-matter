@@ -19,16 +19,16 @@
 //!
 //! [`HandlerInvoker`] drives a single attribute read/write or command invoke
 //! against the cluster handlers: it builds the handler-facing context and reply
-//! (the concrete `dm` `*Instance` realizations), calls the handler, and encodes
+//! (the `*Instance` realizations in `im::context` and `dm`), calls the handler, and encodes
 //! the wire-format outcome (`AttrResp`/`CmdResp`/status), handling `NoSpace`
 //! rewind and subscription change-notification. Driven by the responders in
 //! [`crate::im`].
 
 use crate::dm::{
-    AsyncHandler, AttrDetails, CmdDetails, HandlerContext, InvokeContextInstance,
-    InvokeReplyInstance, ReadContextInstance, ReadReplyInstance, WriteContextInstance,
+    AsyncHandler, AttrDetails, CmdDetails, HandlerContext, InvokeReplyInstance, ReadReplyInstance,
 };
 use crate::error::{Error, ErrorCode};
+use crate::im::context::{InvokeContextInstance, ReadContextInstance, WriteContextInstance};
 use crate::im::encoding::{AttrResp, AttrStatus, CmdResp, CmdStatus, IMStatusCode};
 use crate::tlv::{TLVElement, TLVWrite, TagType, ToTLV};
 use crate::transport::exchange::Exchange;
@@ -108,7 +108,7 @@ where
         self.context
             .handler()
             .read(
-                ReadContextInstance::new(self.exchange, &self.context, attr),
+                ReadContextInstance::new(self.exchange.id(), &self.context, attr),
                 ReadReplyInstance::new(attr, tw),
             )
             .await
@@ -183,7 +183,7 @@ where
         self.context
             .handler()
             .write(WriteContextInstance::new(
-                self.exchange,
+                self.exchange.id(),
                 &self.context,
                 attr,
                 data,
@@ -266,7 +266,7 @@ where
         self.context
             .handler()
             .invoke(
-                InvokeContextInstance::new(self.exchange, &self.context, cmd, data),
+                InvokeContextInstance::new(self.exchange.id(), &self.context, cmd, data),
                 InvokeReplyInstance::new(cmd, tw),
             )
             .await

@@ -29,7 +29,7 @@
 
 use core::future::Future;
 
-use crate::respond::ExchangeHandler;
+use crate::transport::exchange::ExchangeHandler;
 use crate::utils::sync::{MaybeSend, MaybeSendSync};
 
 use super::nego::abort;

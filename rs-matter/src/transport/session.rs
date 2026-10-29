@@ -37,6 +37,7 @@ use crate::group_keys::KeySet;
 use crate::persist::{KvBlobStore, KvBlobStoreAccess, Persist, GROUP_DATA_COUNTER_KEY};
 use crate::sc::SessionParameters;
 use crate::transport::exchange::ExchangeId;
+use crate::transport::exchange::ExchangeIdInternal as _;
 use crate::transport::mrp::{self, ReliableMessage};
 use crate::transport::TransportRunner;
 use crate::utils::init::{init, Init, IntoFallibleInit};
@@ -1546,7 +1547,7 @@ impl Sessions {
         fab_idx: NonZeroU8,
         group_id: u16,
     ) -> Result<&mut Session, Error> {
-        use crate::dm::clusters::decl::groupcast::MulticastAddrPolicyEnum;
+        use crate::fabric::MulticastAddrPolicy;
         use crate::transport::network::{SocketAddr, SocketAddrV6};
 
         let fabric = fabrics.fabric(fab_idx)?;
@@ -1584,10 +1585,10 @@ impl Sessions {
             .groups()
             .get(group_id)
             .map(|entry| entry.effective_mcast_policy())
-            .unwrap_or(MulticastAddrPolicyEnum::PerGroup)
+            .unwrap_or(MulticastAddrPolicy::PerGroup)
         {
-            MulticastAddrPolicyEnum::IanaAddr => crate::utils::ipv6::IANA_GROUPCAST_MULTICAST_ADDR,
-            MulticastAddrPolicyEnum::PerGroup => {
+            MulticastAddrPolicy::IanaAddr => crate::utils::ipv6::IANA_GROUPCAST_MULTICAST_ADDR,
+            MulticastAddrPolicy::PerGroup => {
                 crate::utils::ipv6::compute_group_multicast_addr(fabric.fabric_id(), group_id)
             }
         };

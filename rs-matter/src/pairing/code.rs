@@ -19,8 +19,8 @@ use core::fmt::Write;
 
 use verhoeff::Verhoeff;
 
+use crate::pairing::BasicCommData;
 use crate::utils::storage::String;
-use crate::BasicCommData;
 
 impl BasicCommData {
     /// Compute the 11-digit manual pairing code (no vendor/product IDs)

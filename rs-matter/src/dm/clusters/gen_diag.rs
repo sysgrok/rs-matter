@@ -21,14 +21,14 @@ use core::fmt::Debug;
 use core::net::{Ipv4Addr, Ipv6Addr};
 use core::num::NonZeroU8;
 
+use crate::dm::ImStats;
 use crate::dm::{ArrayAttributeRead, Cluster, Dataver, InvokeContext, ReadContext};
 use crate::error::{Error, ErrorCode};
-use crate::im::ImStats;
 use crate::tlv::{Nullable, Octets, TLVBuilder, TLVBuilderParent};
 use crate::utils::epoch::MATTER_EPOCH_SECS;
 use crate::utils::sync::MaybeSendSync;
 use crate::utils::timers::Instant;
-use crate::with;
+use crate::{with, BootReason as NodeBootReason, Matter};
 
 pub use crate::dm::clusters::decl::general_diagnostics::*;
 
@@ -109,7 +109,7 @@ impl NetifInfo<'_> {
 /// which is where the subscription figures come from and which assembles the
 /// whole struct, but it is reported through this cluster. The message counters
 /// within it are tracked one layer down, by the transport.
-pub use crate::im::DeviceLoad;
+pub use crate::dm::DeviceLoad;
 
 /// A trait to which the system implementation of the General Diagnostics Matter cluster
 /// delegates for information.
@@ -179,19 +179,23 @@ impl NetifDiag for () {
 #[derive(Clone)]
 pub struct GenDiagHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
 }
 
 impl<'a> GenDiagHandler<'a> {
-    /// Create a new instance of `GenDiagHandler` with the given `Dataver`.
+    /// Create a new instance of `GenDiagHandler` with the given `Dataver`,
+    /// reporting the boot data of `matter`.
     pub const fn new(
         dataver: Dataver,
+        matter: &'a Matter<'a>,
         diag: &'a dyn GenDiag,
         netif_diag: &'a dyn NetifDiag,
     ) -> Self {
         Self {
             dataver,
+            matter,
             diag,
             netif_diag,
         }
@@ -273,20 +277,20 @@ impl ClusterHandler for GenDiagHandler<'_> {
         }
     }
 
-    fn reboot_count(&self, ctx: impl ReadContext) -> Result<u16, Error> {
-        Ok(ctx.exchange().matter().reboot_count())
+    fn reboot_count(&self, _ctx: impl ReadContext) -> Result<u16, Error> {
+        Ok(self.matter.reboot_count())
     }
 
     fn up_time(&self, _ctx: impl ReadContext) -> Result<u64, Error> {
         Ok(Instant::now().as_secs())
     }
 
-    fn total_operational_hours(&self, ctx: impl ReadContext) -> Result<u32, Error> {
-        Ok(ctx.exchange().matter().total_operational_hours())
+    fn total_operational_hours(&self, _ctx: impl ReadContext) -> Result<u32, Error> {
+        Ok(self.matter.total_operational_hours())
     }
 
-    fn boot_reason(&self, ctx: impl ReadContext) -> Result<BootReasonEnum, Error> {
-        Ok(ctx.exchange().matter().boot_reason())
+    fn boot_reason(&self, _ctx: impl ReadContext) -> Result<BootReasonEnum, Error> {
+        Ok(boot_reason_to_cluster(self.matter.boot_reason()))
     }
 
     fn device_load_status<P: TLVBuilderParent>(
@@ -338,8 +342,7 @@ impl ClusterHandler for GenDiagHandler<'_> {
         // Matter-wide current UTC time directly from `Matter::utc_time`
         // and convert (Matter-epoch microseconds) → POSIX-epoch ms.
         let posix_time_ms = Nullable::new(
-            ctx.matter()
-                .with_state(|state| state.rtc.utc_time())
+            ctx.utc_time()
                 .reliable()
                 .map(|us| us / 1000)
                 .map(|ms| ms.saturating_add(MATTER_EPOCH_SECS.saturating_mul(1000))),
@@ -373,5 +376,18 @@ impl Debug for GenDiagHandler<'_> {
 impl defmt::Format for GenDiagHandler<'_> {
     fn format(&self, fmt: defmt::Formatter) {
         defmt::write!(fmt, "GenDiagHandler {{ dataver: {} }}", self.dataver);
+    }
+}
+
+/// Convert a boot reason of the node to the cluster's one
+fn boot_reason_to_cluster(reason: NodeBootReason) -> BootReasonEnum {
+    match reason {
+        NodeBootReason::Unspecified => BootReasonEnum::Unspecified,
+        NodeBootReason::PowerOnReboot => BootReasonEnum::PowerOnReboot,
+        NodeBootReason::BrownOutReset => BootReasonEnum::BrownOutReset,
+        NodeBootReason::SoftwareWatchdogReset => BootReasonEnum::SoftwareWatchdogReset,
+        NodeBootReason::HardwareWatchdogReset => BootReasonEnum::HardwareWatchdogReset,
+        NodeBootReason::SoftwareUpdateCompleted => BootReasonEnum::SoftwareUpdateCompleted,
+        NodeBootReason::SoftwareReset => BootReasonEnum::SoftwareReset,
     }
 }

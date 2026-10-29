@@ -22,8 +22,7 @@ use crate::crypto::{
     CanonAeadKeyRef, CanonPkcSecretKey, CanonPkcSecretKeyRef, Crypto, PublicKey, SecretKey,
     SigningSecretKey, PKC_SECRET_KEY_ZEROED,
 };
-use crate::dm::clusters::time_sync::UtcTime;
-use crate::dm::endpoints::ROOT_ENDPOINT_ID;
+use crate::dm::ROOT_ENDPOINT_ID;
 use crate::dm::{ClusterId, EndptId, HandlerContext, LifecycleOp};
 use crate::error::{Error, ErrorCode};
 use crate::fabric::{Fabric, Fabrics};
@@ -33,6 +32,7 @@ use crate::sc::pase::Pase;
 use crate::tlv::TLVElement;
 use crate::transport::session::SessionMode;
 use crate::utils::bitflags::bitflags;
+use crate::utils::epoch::UtcTime;
 use crate::utils::init::{init, Init};
 use crate::utils::storage::Vec;
 use crate::utils::timers::{Duration, Instant};
@@ -85,6 +85,9 @@ impl From<IMStatusCode> for IMError {
 /// fail-safe (e.g. on PASE session establishment). Mirrors
 /// `CHIP_DEVICE_CONFIG_FAILSAFE_EXPIRY_LENGTH_SEC` from the reference SDK.
 pub const DEFAULT_FAILSAFE_EXPIRY_SECS: u16 = 60;
+
+/// The ID of the Operational Credentials cluster.
+const OPERATIONAL_CREDENTIALS_CLUSTER_ID: ClusterId = 0x003E;
 
 /// The outcome of a fail-safe expiry.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -257,10 +260,7 @@ impl FailSafe {
         // *not* bump the affected clusters' data versions. `Failsafe`
         // has no handle to the cluster meta needed to do that. Pre-existing
         // limitation, not introduced by the timeout-vs-force-expiry path.
-        notify_change(
-            ROOT_ENDPOINT_ID,
-            crate::dm::clusters::decl::operational_credentials::FULL_CLUSTER.id,
-        );
+        notify_change(ROOT_ENDPOINT_ID, OPERATIONAL_CREDENTIALS_CLUSTER_ID);
 
         Ok(Some(Expiry { removed_fabric }))
     }
@@ -952,9 +952,8 @@ mod tests {
 
     use crate::cert::gen::VALID_FOREVER;
     use crate::crypto::{test_only_crypto, CanonPkcSecretKey, Crypto, PKC_CANON_SECRET_KEY_LEN};
-    use crate::dm::clusters::time_sync::UtcTime;
     use crate::dm::devices::test::TEST_DEV_COMM;
-    use crate::dm::endpoints::ROOT_ENDPOINT_ID;
+    use crate::dm::ROOT_ENDPOINT_ID;
     use crate::dm::{ClusterId, EndptId};
     use crate::error::{Error, ErrorCode};
     use crate::fabric::tests::{
@@ -964,6 +963,7 @@ mod tests {
     use crate::fabric::{FabricPersist, Fabrics, MAX_FABRICS};
     use crate::sc::pase::Pase;
     use crate::transport::session::{SessionMode, Sessions};
+    use crate::utils::epoch::UtcTime;
 
     use super::{Expiry, FailSafe, DEFAULT_FAILSAFE_EXPIRY_SECS};
 
@@ -1273,10 +1273,7 @@ mod tests {
 
     /// The `(endpoint, cluster)` notifications an expiry emits.
     fn expected_expiry_changes() -> std::vec::Vec<(EndptId, ClusterId)> {
-        std::vec![(
-            ROOT_ENDPOINT_ID,
-            crate::dm::clusters::decl::operational_credentials::FULL_CLUSTER.id,
-        )]
+        std::vec![(ROOT_ENDPOINT_ID, super::OPERATIONAL_CREDENTIALS_CLUSTER_ID,)]
     }
 
     #[test]

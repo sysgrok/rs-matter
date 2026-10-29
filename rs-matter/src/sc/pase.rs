@@ -22,8 +22,7 @@
 
 use core::num::NonZeroU8;
 
-use crate::dm::clusters::adm_comm::{self};
-use crate::dm::endpoints::ROOT_ENDPOINT_ID;
+use crate::dm::ROOT_ENDPOINT_ID;
 use crate::error::{Error, ErrorCode};
 use crate::im::{ClusterId, EndptId};
 use crate::sc::pase::spake2p::{
@@ -54,13 +53,16 @@ pub const MIN_COMM_WINDOW_TIMEOUT_SECS: u16 = 3 * 60;
 /// Maximal commissioning window timeout in seconds, as per the Matter Core Spec
 pub const MAX_COMM_WINDOW_TIMEOUT_SECS: u16 = 15 * 60;
 
+/// The ID of the Administrator Commissioning cluster.
+const ADMIN_COMMISSIONING_CLUSTER_ID: ClusterId = 0x003C;
+
 /// Notify that the externally-visible attributes of the Administrator
 /// Commissioning cluster may have changed. Called whenever the commissioning
 /// window is opened or closed: `WindowStatus`, `AdminFabricIndex` and
 /// `AdminVendorId` all transition together, so we mark the entire cluster
 /// dirty with a single call.
 fn notify_adm_comm_window_attrs_changed(notify_change: &mut impl FnMut(EndptId, ClusterId)) {
-    notify_change(ROOT_ENDPOINT_ID, adm_comm::FULL_CLUSTER.id);
+    notify_change(ROOT_ENDPOINT_ID, ADMIN_COMMISSIONING_CLUSTER_ID);
 }
 
 /// The type of commissioning window

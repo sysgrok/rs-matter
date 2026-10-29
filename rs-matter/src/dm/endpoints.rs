@@ -46,7 +46,7 @@
 use rand_core::Rng;
 
 use crate::dm::{EmptyHandler, FnMatcher};
-use crate::handler_chain_type;
+use crate::{handler_chain_type, Matter};
 
 use super::clusters::acl::{self, AclHandler, ClusterHandler as _};
 use super::clusters::adm_comm::{self, AdminCommHandler, ClusterHandler as _};
@@ -68,8 +68,343 @@ use super::clusters::wifi_diag::{
 };
 use super::networks::eth::{EthNetCtl, EthNetwork};
 use super::networks::NetChangeNotif;
-use super::types::{Async, ChainedHandler, Dataver, EndptId};
+use super::types::{Async, ChainedHandler, Dataver};
 use crate::persist::NETWORKS_KEY;
+
+/// A macro to generate the clusters' meta-data for an endpoint.
+///
+/// Net-type tokens (pick exactly one):
+/// - `sys;` - all system model clusters except the concrete Network Diagnostics
+///   cluster. Usually you want `eth;` / `wifi;` / `thread;` instead.
+/// - `eth;` / `wifi;` / `thread;` - same as `sys;` plus the matching Network
+///   Diagnostics cluster.
+///
+/// Optional cluster-shape modifiers — supply zero or more, in the order
+/// shown, after the net-type token:
+/// - `sw_diag(heap | watermarks | thread, …)` - shape the Software Diagnostics
+///   cluster's advertised attribute/command surface. Tokens map to
+///   [`crate::dm::clusters::sw_diag::Options`]: `heap` → `HEAP`,
+///   `watermarks` → `WATERMARKS` (claims the Matter `WATERMARKS` feature and
+///   implies `HEAP`), `thread` → `THREAD` (advertises `ThreadMetrics`; unrelated
+///   to the Thread network protocol).
+/// - `time_sync(time_zone | ntp_client | ntp_server | time_sync_client, …)` -
+///   shape the Time Synchronization cluster. Tokens map 1:1 to
+///   [`crate::dm::clusters::time_sync::Options`] and to the matching Matter
+///   features (`TIME_ZONE`, `NTP_CLIENT`, `NTP_SERVER`, `TIME_SYNC_CLIENT`).
+///
+/// - `eth_diag(phy_rate | full_duplex | carrier_detect | time_since_reset | packet_counts |
+///   error_counts, …)` - `eth;` only; shape the Ethernet Network Diagnostics cluster. Tokens map
+///   1:1 to [`crate::dm::clusters::eth_diag::Options`]; `packet_counts` and `error_counts` claim
+///   the Matter `PKTCNT` and `ERRCNT` features.
+/// - `thread_diag(error_counts | mle_counts | mac_counts | active_timestamp | pending_timestamp |
+///   delay, …)` - `thread;` only; shape the Thread Network Diagnostics cluster. Tokens map 1:1 to
+///   [`crate::dm::clusters::thread_diag::Options`]; the `*_counts` ones claim the Matter
+///   `ERRCNT`, `MLECNT` and `MACCNT` features.
+/// - `wifi_diag(error_counts | packet_counts | current_max_rate, …)` - `wifi;` only; shape the
+///   Wi-Fi Network Diagnostics cluster. Tokens map 1:1 to
+///   [`crate::dm::clusters::wifi_diag::Options`]; the `*_counts` ones claim the Matter `ERRCNT`
+///   and `PKTCNT` features.
+///
+/// Omitting a modifier advertises the corresponding cluster's empty-options
+/// shape (required globals + always-on attributes, no features, no commands).
+///
+/// Trailing positional arguments are additional `Cluster<'static>` literals
+/// merged into the slice — e.g. `clusters!(eth, sw_diag(heap); my_cluster)`.
+///
+/// The Groups cluster is intentionally *not* included in any of these presets:
+/// Root Node (Matter Device Library) does not list Groups, and Groups
+/// (Matter Application Cluster Specification) is scoped to per-endpoint
+/// group membership which has no defined behavior on the Root Node. Wire
+/// `GroupsHandler::CLUSTER` onto the application endpoint(s) where it actually
+/// has meaning instead.
+#[allow(unused_macros)]
+#[macro_export]
+macro_rules! clusters {
+    (sys
+        $(, acl($($acl_opt:ident),* $(,)?))?
+        $(, sw_diag($($sw_opt:ident),* $(,)?))?
+        $(, time_sync($($ts_opt:ident),* $(,)?))?
+        ; $($cluster:expr $(,)?)*
+    ) => {
+        $crate::clusters!(
+            <$crate::dm::clusters::desc::DescHandler as $crate::dm::clusters::desc::ClusterHandler>::CLUSTER,
+            $crate::__acl_cluster!( $($($acl_opt),*)? ),
+            <$crate::dm::clusters::basic_info::BasicInfoHandler as $crate::dm::clusters::basic_info::ClusterHandler>::CLUSTER,
+            <$crate::dm::clusters::gen_comm::GenCommHandler as $crate::dm::clusters::gen_comm::ClusterHandler>::CLUSTER,
+            <$crate::dm::clusters::gen_diag::GenDiagHandler as $crate::dm::clusters::gen_diag::ClusterHandler>::CLUSTER,
+            $crate::dm::clusters::sw_diag::cluster(
+                $crate::__sw_diag_options!( $($($sw_opt),*)? )
+            ),
+            $crate::dm::clusters::time_sync::cluster::<{
+                $crate::__time_sync_options!( $($($ts_opt),*)? ).bits()
+            }>(),
+            <$crate::dm::clusters::adm_comm::AdminCommHandler as $crate::dm::clusters::adm_comm::ClusterHandler>::CLUSTER,
+            <$crate::dm::clusters::noc::NocHandler as $crate::dm::clusters::noc::ClusterHandler>::CLUSTER,
+            <$crate::dm::clusters::grp_key_mgmt::GrpKeyMgmtHandler as $crate::dm::clusters::grp_key_mgmt::ClusterHandler>::CLUSTER,
+            $($cluster,)*
+        )
+    };
+    (eth
+        $(, acl($($acl_opt:ident),* $(,)?))?
+        $(, sw_diag($($sw_opt:ident),* $(,)?))?
+        $(, time_sync($($ts_opt:ident),* $(,)?))?
+        $(, eth_diag($($ed_opt:ident),* $(,)?))?
+        ; $($cluster:expr $(,)?)*
+    ) => {
+        $crate::clusters!(
+            sys
+            $(, acl($($acl_opt),*))?
+            $(, sw_diag($($sw_opt),*))?
+            $(, time_sync($($ts_opt),*))?
+            ;
+            $crate::dm::clusters::net_comm::NetworkType::Ethernet.cluster(),
+            $crate::dm::clusters::eth_diag::cluster::<{
+                $crate::__eth_diag_options!( $($($ed_opt),*)? ).bits()
+            }>(),
+            $($cluster,)*
+        )
+    };
+    (thread
+        $(, acl($($acl_opt:ident),* $(,)?))?
+        $(, sw_diag($($sw_opt:ident),* $(,)?))?
+        $(, time_sync($($ts_opt:ident),* $(,)?))?
+        $(, thread_diag($($td_opt:ident),* $(,)?))?
+        ; $($cluster:expr $(,)?)*
+    ) => {
+        $crate::clusters!(
+            sys
+            $(, acl($($acl_opt),*))?
+            $(, sw_diag($($sw_opt),*))?
+            $(, time_sync($($ts_opt),*))?
+            ;
+            $crate::dm::clusters::net_comm::NetworkType::Thread.cluster(),
+            $crate::dm::clusters::thread_diag::cluster::<{
+                $crate::__thread_diag_options!( $($($td_opt),*)? ).bits()
+            }>(),
+            $($cluster,)*
+        )
+    };
+    (wifi
+        $(, acl($($acl_opt:ident),* $(,)?))?
+        $(, sw_diag($($sw_opt:ident),* $(,)?))?
+        $(, time_sync($($ts_opt:ident),* $(,)?))?
+        $(, wifi_diag($($wd_opt:ident),* $(,)?))?
+        ; $($cluster:expr $(,)?)*
+    ) => {
+        $crate::clusters!(
+            sys
+            $(, acl($($acl_opt),*))?
+            $(, sw_diag($($sw_opt),*))?
+            $(, time_sync($($ts_opt),*))?
+            ;
+            $crate::dm::clusters::net_comm::NetworkType::Wifi.cluster(),
+            $crate::dm::clusters::wifi_diag::cluster::<{
+                $crate::__wifi_diag_options!( $($($wd_opt),*)? ).bits()
+            }>(),
+            $($cluster,)*
+        )
+    };
+    ($($cluster:expr $(,)?)*) => {
+        &[
+            $($cluster,)*
+        ]
+    }
+}
+
+/// Internal helper: map the `acl(...)` option token to the matching Access
+/// Control cluster metadata: no token → the default
+/// [`crate::dm::clusters::acl::AclHandler::CLUSTER`]; `aux` →
+/// [`crate::dm::clusters::acl::CLUSTER_AUX`] (advertising the provisional
+/// `AUXILIARY` feature and `AuxiliaryACL` attribute, e.g. for nodes hosting
+/// the Groupcast cluster).
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __acl_cluster {
+    () => {
+        <$crate::dm::clusters::acl::AclHandler as $crate::dm::clusters::acl::ClusterHandler>::CLUSTER
+    };
+    (aux) => {
+        $crate::dm::clusters::acl::CLUSTER_AUX
+    };
+}
+
+/// Internal helper: turn a comma-separated list of `sw_diag(...)` lowercase
+/// tokens into the corresponding [`crate::dm::clusters::sw_diag::Options`]
+/// bitset value. `heap` → `HEAP`, `watermarks` → `WATERMARKS`, `thread`
+/// → `THREAD`.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __sw_diag_options {
+    () => { $crate::dm::clusters::sw_diag::Options::empty() };
+    ($($opt:ident),+ $(,)?) => {
+        $crate::dm::clusters::sw_diag::Options::empty()
+            $(.union($crate::__sw_diag_option_bit!($opt)))+
+    };
+}
+
+/// Internal helper: map one lowercase `sw_diag(...)` token to the matching
+/// [`crate::dm::clusters::sw_diag::Options`] constant.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __sw_diag_option_bit {
+    (heap) => {
+        $crate::dm::clusters::sw_diag::Options::HEAP
+    };
+    (watermarks) => {
+        $crate::dm::clusters::sw_diag::Options::WATERMARKS
+    };
+    (thread) => {
+        $crate::dm::clusters::sw_diag::Options::THREAD
+    };
+}
+
+/// Internal helper: turn a comma-separated list of `eth_diag(...)` lowercase
+/// tokens into the corresponding [`crate::dm::clusters::eth_diag::Options`]
+/// bitset value.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __eth_diag_options {
+    () => { $crate::dm::clusters::eth_diag::Options::empty() };
+    ($($opt:ident),+ $(,)?) => {
+        $crate::dm::clusters::eth_diag::Options::empty()
+            $(.union($crate::__eth_diag_option_bit!($opt)))+
+    };
+}
+
+/// Internal helper: map one lowercase `eth_diag(...)` token to the matching
+/// [`crate::dm::clusters::eth_diag::Options`] constant.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __eth_diag_option_bit {
+    (phy_rate) => {
+        $crate::dm::clusters::eth_diag::Options::PHY_RATE
+    };
+    (full_duplex) => {
+        $crate::dm::clusters::eth_diag::Options::FULL_DUPLEX
+    };
+    (carrier_detect) => {
+        $crate::dm::clusters::eth_diag::Options::CARRIER_DETECT
+    };
+    (time_since_reset) => {
+        $crate::dm::clusters::eth_diag::Options::TIME_SINCE_RESET
+    };
+    (packet_counts) => {
+        $crate::dm::clusters::eth_diag::Options::PACKET_COUNTS
+    };
+    (error_counts) => {
+        $crate::dm::clusters::eth_diag::Options::ERROR_COUNTS
+    };
+}
+
+/// Internal helper: turn a comma-separated list of `thread_diag(...)` lowercase
+/// tokens into the corresponding [`crate::dm::clusters::thread_diag::Options`]
+/// bitset value.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thread_diag_options {
+    () => { $crate::dm::clusters::thread_diag::Options::empty() };
+    ($($opt:ident),+ $(,)?) => {
+        $crate::dm::clusters::thread_diag::Options::empty()
+            $(.union($crate::__thread_diag_option_bit!($opt)))+
+    };
+}
+
+/// Internal helper: map one lowercase `thread_diag(...)` token to the matching
+/// [`crate::dm::clusters::thread_diag::Options`] constant.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thread_diag_option_bit {
+    (error_counts) => {
+        $crate::dm::clusters::thread_diag::Options::ERROR_COUNTS
+    };
+    (mle_counts) => {
+        $crate::dm::clusters::thread_diag::Options::MLE_COUNTS
+    };
+    (mac_counts) => {
+        $crate::dm::clusters::thread_diag::Options::MAC_COUNTS
+    };
+    (active_timestamp) => {
+        $crate::dm::clusters::thread_diag::Options::ACTIVE_TIMESTAMP
+    };
+    (pending_timestamp) => {
+        $crate::dm::clusters::thread_diag::Options::PENDING_TIMESTAMP
+    };
+    (delay) => {
+        $crate::dm::clusters::thread_diag::Options::DELAY
+    };
+}
+
+/// Internal helper: turn a comma-separated list of `wifi_diag(...)` lowercase
+/// tokens into the corresponding [`crate::dm::clusters::wifi_diag::Options`]
+/// bitset value.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wifi_diag_options {
+    () => { $crate::dm::clusters::wifi_diag::Options::empty() };
+    ($($opt:ident),+ $(,)?) => {
+        $crate::dm::clusters::wifi_diag::Options::empty()
+            $(.union($crate::__wifi_diag_option_bit!($opt)))+
+    };
+}
+
+/// Internal helper: map one lowercase `wifi_diag(...)` token to the matching
+/// [`crate::dm::clusters::wifi_diag::Options`] constant.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wifi_diag_option_bit {
+    (error_counts) => {
+        $crate::dm::clusters::wifi_diag::Options::ERROR_COUNTS
+    };
+    (packet_counts) => {
+        $crate::dm::clusters::wifi_diag::Options::PACKET_COUNTS
+    };
+    (current_max_rate) => {
+        $crate::dm::clusters::wifi_diag::Options::CURRENT_MAX_RATE
+    };
+}
+
+/// Internal helper: turn a comma-separated list of `time_sync(...)` lowercase
+/// tokens into the corresponding [`crate::dm::clusters::time_sync::Options`]
+/// bitset value. Tokens map 1:1 to the matching Matter features.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __time_sync_options {
+    () => { $crate::dm::clusters::time_sync::Options::empty() };
+    ($($opt:ident),+ $(,)?) => {
+        $crate::dm::clusters::time_sync::Options::empty()
+            $(.union($crate::__time_sync_option_bit!($opt)))+
+    };
+}
+
+/// Internal helper: map one lowercase `time_sync(...)` token to the matching
+/// [`crate::dm::clusters::time_sync::Options`] constant.
+#[allow(unused_macros)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __time_sync_option_bit {
+    (time_zone) => {
+        $crate::dm::clusters::time_sync::Options::TIME_ZONE
+    };
+    (ntp_client) => {
+        $crate::dm::clusters::time_sync::Options::NTP_CLIENT
+    };
+    (ntp_server) => {
+        $crate::dm::clusters::time_sync::Options::NTP_SERVER
+    };
+    (time_sync_client) => {
+        $crate::dm::clusters::time_sync::Options::TIME_SYNC_CLIENT
+    };
+}
 
 /// A macro to generate the meta-data for the root endpoint (Endpoint 0).
 ///
@@ -128,8 +463,7 @@ macro_rules! root_endpoint {
     }
 }
 
-/// The ID of the root endpoint (Endpoint 0)
-pub const ROOT_ENDPOINT_ID: EndptId = 0;
+pub use crate::dm::ROOT_ENDPOINT_ID;
 
 /// A type alias for the handler chain returned by `root_handler()`:
 /// the root endpoint system clusters that do not depend on the operational network.
@@ -138,11 +472,11 @@ pub const ROOT_ENDPOINT_ID: EndptId = 0;
 /// `T` is the handler at the end of the chain.
 pub type RootHandler<'a, T = EmptyHandler> = handler_chain_type!(
     FnMatcher => desc::HandlerAdaptor<DescHandler<'a>>,
-    FnMatcher => basic_info::HandlerAdaptor<BasicInfoHandler>,
-    FnMatcher => adm_comm::HandlerAdaptor<AdminCommHandler>,
-    FnMatcher => noc::HandlerAdaptor<NocHandler>,
-    FnMatcher => acl::HandlerAdaptor<AclHandler>,
-    FnMatcher => grp_key_mgmt::HandlerAdaptor<GrpKeyMgmtHandler>,
+    FnMatcher => basic_info::HandlerAdaptor<BasicInfoHandler<'a>>,
+    FnMatcher => adm_comm::HandlerAdaptor<AdminCommHandler<'a>>,
+    FnMatcher => noc::HandlerAdaptor<NocHandler<'a>>,
+    FnMatcher => acl::HandlerAdaptor<AclHandler<'a>>,
+    FnMatcher => grp_key_mgmt::HandlerAdaptor<GrpKeyMgmtHandler<'a>>,
     FnMatcher => sw_diag::HandlerAdaptor<SwDiagHandler<'a>>,
     FnMatcher => time_sync::HandlerAdaptor<TimeSyncHandler<'a>>
     | T
@@ -225,11 +559,16 @@ pub type SysHandler<'a, S, T, N> = handler_chain_type!(
 /// for a chain with all root endpoint system clusters.
 ///
 /// # Arguments:
+/// - `matter`: The `Matter` instance the clusters serve.
 /// - `sw_diag`: The `SwDiag` implementation (pass `&()` for the
 ///   no-op default: heap counters report `0`).
 /// - `rand`: A random number generator.
-pub fn root_handler<'a, R: Rng>(sw_diag: &'a dyn SwDiag, rand: R) -> RootHandler<'a> {
-    root_handler_chained(sw_diag, EmptyHandler, rand)
+pub fn root_handler<'a, R: Rng>(
+    matter: &'a Matter<'a>,
+    sw_diag: &'a dyn SwDiag,
+    rand: R,
+) -> RootHandler<'a> {
+    root_handler_chained(matter, sw_diag, EmptyHandler, rand)
 }
 
 /// Return a handler for the root endpoint operational network clusters,
@@ -237,6 +576,7 @@ pub fn root_handler<'a, R: Rng>(sw_diag: &'a dyn SwDiag, rand: R) -> RootHandler
 /// Use this handler for devices that use Ethernet as the Matter Operational Network.
 ///
 /// # Arguments:
+/// - `matter`: The `Matter` instance the clusters serve.
 /// - `comm_policy`: The `CommPolicy` implementation.
 /// - `gen_diag`: The `GenDiag` implementation.
 /// - `netif_diag`: The `NetifDiag` implementation.
@@ -244,6 +584,7 @@ pub fn root_handler<'a, R: Rng>(sw_diag: &'a dyn SwDiag, rand: R) -> RootHandler
 /// - `next`: The handler to chain on top of; receives everything not matched here.
 /// - `rand`: A random number generator.
 pub fn eth_net_handler<'a, R: Rng, H>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -252,6 +593,7 @@ pub fn eth_net_handler<'a, R: Rng, H>(
     mut rand: R,
 ) -> EthNetHandler<'a, H> {
     net_handler(
+        matter,
         comm_policy,
         gen_diag,
         netif_diag,
@@ -275,6 +617,7 @@ pub fn eth_net_handler<'a, R: Rng, H>(
 /// Use this handler for devices that use Wifi as the Matter Operational Network.
 ///
 /// # Arguments:
+/// - `matter`: The `Matter` instance the clusters serve.
 /// - `comm_policy`: The `CommPolicy` implementation.
 /// - `gen_diag`: The `GenDiag` implementation.
 /// - `netif_diag`: The `NetifDiag` implementation.
@@ -286,6 +629,7 @@ pub fn eth_net_handler<'a, R: Rng, H>(
 /// - `rand`: A random number generator.
 #[allow(clippy::too_many_arguments)]
 pub fn wifi_net_handler<'a, R: Rng, S, T, H>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -300,6 +644,7 @@ where
     T: NetCtl + NetCtlStatus + WirelessDiag + NetChangeNotif,
 {
     net_handler(
+        matter,
         comm_policy,
         gen_diag,
         netif_diag,
@@ -323,6 +668,7 @@ where
 /// Use this handler for devices that use Thread as the Matter Operational Network.
 ///
 /// # Arguments:
+/// - `matter`: The `Matter` instance the clusters serve.
 /// - `comm_policy`: The `CommPolicy` implementation.
 /// - `gen_diag`: The `GenDiag` implementation.
 /// - `netif_diag`: The `NetifDiag` implementation.
@@ -334,6 +680,7 @@ where
 /// - `rand`: A random number generator.
 #[allow(clippy::too_many_arguments)]
 pub fn thread_net_handler<'a, R: Rng, S, T, H>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -348,6 +695,7 @@ where
     T: NetCtl + NetCtlStatus + WirelessDiag + NetChangeNotif,
 {
     net_handler(
+        matter,
         comm_policy,
         gen_diag,
         netif_diag,
@@ -370,6 +718,7 @@ where
 /// Use this handler for devices that use Ethernet as the Matter Operational Network.
 ///
 /// # Arguments:
+/// - `matter`: The `Matter` instance the clusters serve.
 /// - `comm_policy`: The `CommPolicy` implementation.
 /// - `gen_diag`: The `GenDiag` implementation.
 /// - `netif_diag`: The `NetifDiag` implementation.
@@ -379,6 +728,7 @@ where
 /// - `rand`: A random number generator.
 #[allow(clippy::too_many_arguments)]
 pub fn eth_sys_handler<'a, R: Rng>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -387,6 +737,7 @@ pub fn eth_sys_handler<'a, R: Rng>(
     mut rand: R,
 ) -> EthSysHandler<'a> {
     sys_handler(
+        matter,
         comm_policy,
         gen_diag,
         netif_diag,
@@ -404,6 +755,7 @@ pub fn eth_sys_handler<'a, R: Rng>(
 /// Use this handler for devices that use Wifi as the Matter Operational Network.
 ///
 /// # Arguments:
+/// - `matter`: The `Matter` instance the clusters serve.
 /// - `comm_policy`: The `CommPolicy` implementation.
 /// - `gen_diag`: The `GenDiag` implementation.
 /// - `netif_diag`: The `NetifDiag` implementation.
@@ -415,6 +767,7 @@ pub fn eth_sys_handler<'a, R: Rng>(
 /// - `rand`: A random number generator.
 #[allow(clippy::too_many_arguments)]
 pub fn wifi_sys_handler<'a, R: Rng, S, T>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -429,6 +782,7 @@ where
     T: NetCtl + NetCtlStatus + WirelessDiag + NetChangeNotif,
 {
     sys_handler(
+        matter,
         comm_policy,
         gen_diag,
         netif_diag,
@@ -446,6 +800,7 @@ where
 /// Use this handler for devices that use Thread as the Matter Operational Network.
 ///
 /// # Arguments:
+/// - `matter`: The `Matter` instance the clusters serve.
 /// - `comm_policy`: The `CommPolicy` implementation.
 /// - `gen_diag`: The `GenDiag` implementation.
 /// - `netif_diag`: The `NetifDiag` implementation.
@@ -457,6 +812,7 @@ where
 /// - `rand`: A random number generator.
 #[allow(clippy::too_many_arguments)]
 pub fn thread_sys_handler<'a, R: Rng, S, T>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -471,6 +827,7 @@ where
     T: NetCtl + NetCtlStatus + WirelessDiag + NetChangeNotif,
 {
     sys_handler(
+        matter,
         comm_policy,
         gen_diag,
         netif_diag,
@@ -486,13 +843,14 @@ where
 
 /// The `root_handler()` chain on top of `next`.
 fn root_handler_chained<'a, R: Rng, T>(
+    matter: &'a Matter<'a>,
     sw_diag: &'a dyn SwDiag,
     next: T,
     mut rand: R,
 ) -> RootHandler<'a, T> {
     ChainedHandler::new(
         |e, c| e == ROOT_ENDPOINT_ID && c == TimeSyncHandler::CLUSTER.id,
-        TimeSyncHandler::new(Dataver::new_rand(&mut rand)).adapt(),
+        TimeSyncHandler::new(Dataver::new_rand(&mut rand), matter).adapt(),
         next,
     )
     .chain(
@@ -501,23 +859,23 @@ fn root_handler_chained<'a, R: Rng, T>(
     )
     .chain(
         |e, c| e == ROOT_ENDPOINT_ID && c == GrpKeyMgmtHandler::CLUSTER.id,
-        GrpKeyMgmtHandler::new(Dataver::new_rand(&mut rand)).adapt(),
+        GrpKeyMgmtHandler::new(Dataver::new_rand(&mut rand), matter).adapt(),
     )
     .chain(
         |e, c| e == ROOT_ENDPOINT_ID && c == AclHandler::CLUSTER.id,
-        AclHandler::new(Dataver::new_rand(&mut rand)).adapt(),
+        AclHandler::new(Dataver::new_rand(&mut rand), matter).adapt(),
     )
     .chain(
         |e, c| e == ROOT_ENDPOINT_ID && c == NocHandler::CLUSTER.id,
-        NocHandler::new(Dataver::new_rand(&mut rand)).adapt(),
+        NocHandler::new(Dataver::new_rand(&mut rand), matter).adapt(),
     )
     .chain(
         |e, c| e == ROOT_ENDPOINT_ID && c == AdminCommHandler::CLUSTER.id,
-        AdminCommHandler::new(Dataver::new_rand(&mut rand)).adapt(),
+        AdminCommHandler::new(Dataver::new_rand(&mut rand), matter).adapt(),
     )
     .chain(
         |e, c| e == ROOT_ENDPOINT_ID && c == BasicInfoHandler::CLUSTER.id,
-        BasicInfoHandler::new(Dataver::new_rand(&mut rand)).adapt(),
+        BasicInfoHandler::new(Dataver::new_rand(&mut rand), matter).adapt(),
     )
     .chain(
         |e, c| e == ROOT_ENDPOINT_ID && c == DescHandler::CLUSTER.id,
@@ -531,6 +889,7 @@ fn root_handler_chained<'a, R: Rng, T>(
 /// at the bottom of the chain, right above `next`.
 #[allow(clippy::too_many_arguments)]
 fn oper_net_handler<'a, R: Rng, N, T>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -542,11 +901,11 @@ fn oper_net_handler<'a, R: Rng, N, T>(
     ChainedHandler::new(netw_diag_matcher, netw_diag, next)
         .chain(
             |e, c| e == ROOT_ENDPOINT_ID && c == GenDiagHandler::CLUSTER.id,
-            GenDiagHandler::new(Dataver::new_rand(&mut rand), gen_diag, netif_diag).adapt(),
+            GenDiagHandler::new(Dataver::new_rand(&mut rand), matter, gen_diag, netif_diag).adapt(),
         )
         .chain(
             |e, c| e == ROOT_ENDPOINT_ID && c == GenCommHandler::CLUSTER.id,
-            GenCommHandler::new(Dataver::new_rand(&mut rand), comm_policy).adapt(),
+            GenCommHandler::new(Dataver::new_rand(&mut rand), matter, comm_policy).adapt(),
         )
 }
 
@@ -563,6 +922,7 @@ fn oper_net_handler<'a, R: Rng, N, T>(
 ///   as the matcher of that link.
 #[allow(clippy::too_many_arguments)]
 fn net_handler<'a, R: Rng, S, T, N, H>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -582,6 +942,7 @@ where
         |e, c| e == ROOT_ENDPOINT_ID && c == NetCommHandler::<S, T>::CLUSTER.id,
         NetCommHandler::new(
             Dataver::new_rand(&mut rand),
+            matter,
             ROOT_ENDPOINT_ID,
             networks,
             NETWORKS_KEY,
@@ -592,6 +953,7 @@ where
         ChainedHandler::new(
             net_matcher,
             Async(oper_net_handler(
+                matter,
                 comm_policy,
                 gen_diag,
                 netif_diag,
@@ -611,6 +973,7 @@ where
 /// appropriate Network Diagnostic handler included in the handler.
 #[allow(clippy::too_many_arguments)]
 fn sys_handler<'a, R: Rng, S, T, N>(
+    matter: &'a Matter<'a>,
     comm_policy: &'a dyn CommPolicy,
     gen_diag: &'a dyn GenDiag,
     netif_diag: &'a dyn NetifDiag,
@@ -630,6 +993,7 @@ where
         |e, c| e == ROOT_ENDPOINT_ID && c == NetCommHandler::<S, T>::CLUSTER.id,
         NetCommHandler::new(
             Dataver::new_rand(&mut rand),
+            matter,
             ROOT_ENDPOINT_ID,
             networks,
             NETWORKS_KEY,
@@ -638,12 +1002,13 @@ where
         )
         .adapt(),
         Async(oper_net_handler(
+            matter,
             comm_policy,
             gen_diag,
             netif_diag,
             netw_diag_matcher,
             netw_diag,
-            root_handler_chained(sw_diag, EmptyHandler, &mut rand),
+            root_handler_chained(matter, sw_diag, EmptyHandler, &mut rand),
             &mut rand,
         )),
     )
@@ -727,9 +1092,10 @@ impl<'a> EthSysHandlerBuilder<'a> {
         self
     }
 
-    /// Build the Ethernet system handler.
-    pub fn build<R: Rng>(self, rand: R) -> EthSysHandler<'a> {
+    /// Build the Ethernet system handler, serving `matter`.
+    pub fn build<R: Rng>(self, matter: &'a Matter<'a>, rand: R) -> EthSysHandler<'a> {
         eth_sys_handler(
+            matter,
             self.comm_policy,
             self.gen_diag,
             self.netif_diag,
@@ -797,9 +1163,10 @@ where
         self
     }
 
-    /// Build the Wi-Fi system handler.
-    pub fn build<R: Rng>(self, rand: R) -> WifiSysHandler<'a, S, T> {
+    /// Build the Wi-Fi system handler, serving `matter`.
+    pub fn build<R: Rng>(self, matter: &'a Matter<'a>, rand: R) -> WifiSysHandler<'a, S, T> {
         wifi_sys_handler(
+            matter,
             self.comm_policy,
             self.gen_diag,
             self.netif_diag,
@@ -869,9 +1236,10 @@ where
         self
     }
 
-    /// Build the Thread system handler.
-    pub fn build<R: Rng>(self, rand: R) -> ThreadSysHandler<'a, S, T> {
+    /// Build the Thread system handler, serving `matter`.
+    pub fn build<R: Rng>(self, matter: &'a Matter<'a>, rand: R) -> ThreadSysHandler<'a, S, T> {
         thread_sys_handler(
+            matter,
             self.comm_policy,
             self.gen_diag,
             self.netif_diag,

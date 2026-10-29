@@ -18,9 +18,9 @@
 //! A set of constants for an uncertified (test) device.
 //! Used in the examples and tests and can be re-used by user code as well.
 
+use crate::attest::DeviceAttestation;
+use crate::basic_info::BasicInfoConfig;
 use crate::crypto::{CanonPkcPublicKeyRef, CanonPkcSecretKeyRef};
-use crate::dm::clusters::basic_info::BasicInfoConfig;
-use crate::dm::clusters::dev_att::DeviceAttestation;
 use crate::sc::pase::spake2p::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
 use crate::BasicCommData;
 
@@ -139,10 +139,7 @@ const DAC_PUBKEY: CanonPkcPublicKeyRef = CanonPkcPublicKeyRef::new(&[
     0x82,
 ]);
 
-pub const DAC_PRIVKEY: CanonPkcSecretKeyRef = CanonPkcSecretKeyRef::new(&[
-    0xaa, 0xb6, 0x00, 0xae, 0x8a, 0xe8, 0xaa, 0xb7, 0xd7, 0x36, 0x27, 0xc2, 0x17, 0xb7, 0xc2, 0x04,
-    0x70, 0x9c, 0xa6, 0x94, 0x6a, 0xf5, 0xf2, 0xf7, 0x53, 0x08, 0x33, 0xa5, 0x2b, 0x44, 0xfb, 0xff,
-]);
+pub use crate::crypto::TEST_DAC_PRIVKEY as DAC_PRIVKEY;
 
 // credentials/examples/DeviceAttestationCredsExample.cpp kCdForAllExamples (VID=0xFFF1 fallback)
 // CertificateId "CSA00000SWC00000-00", PIDs 0x8000..=0x8063.

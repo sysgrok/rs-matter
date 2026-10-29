@@ -32,22 +32,24 @@ use core::pin::pin;
 use crate::acl::Accessor;
 use crate::crypto::Crypto;
 use crate::dm::{
-    AsyncHandler, AttrChangeNotifier, AttrDetails, Attribute, DataModel, EventEmitter,
-    HandlerContext, LifecycleOp, MatchContextInstance, Metadata, ReportDataHandler,
+    AsyncHandler, AttrChangeNotifier, AttrDetails, Attribute, DataModel, DeviceLoad, EventEmitter,
+    EventTLVWrite, HandlerContext, IMBuffer, ImStats, LifecycleOp, MatchContextInstance, Metadata,
+    EVENT_DATA_TAG,
 };
 use crate::error::{Error, ErrorCode};
-use crate::im::events::{
-    EventReader, EventTLVWrite, Events, DEFAULT_MAX_EVENTS_BUF_SIZE, EVENT_DATA_TAG,
-};
+use crate::im::access::NodeAccess as _;
+use crate::im::events::{EventReader, Events, DEFAULT_MAX_EVENTS_BUF_SIZE};
 use crate::im::invoker::HandlerInvoker;
 use crate::im::subscriptions::{
-    icd_max_int_secs, KeepAlive, ReportContext, Subscriptions, SubscriptionsBuffers,
-    DEFAULT_MAX_SUBSCRIPTIONS,
+    icd_max_int_secs, KeepAlive, ReportContext as SubscriptionReport, Subscriptions,
+    SubscriptionsBuffers, DEFAULT_MAX_SUBSCRIPTIONS,
 };
 use crate::persist::KvBlobStoreAccess;
 use crate::respond::ExchangeHandler;
 use crate::tlv::{get_root_node_struct, FromTLV, Nullable, TLVElement, TLVTag, TLVWrite, ToTLV};
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::exchange::{Exchange, ExchangeId, MAX_EXCHANGE_TX_BUF_SIZE};
+use crate::utils::epoch::UtcTime;
 use crate::utils::futures::{select, select3, Coalesce};
 use crate::utils::init::{init, Init};
 use crate::utils::storage::pooled::Buffers;
@@ -59,91 +61,27 @@ use crate::Matter;
 
 pub use encoding::*;
 pub use expand::{expand_invoke, expand_read, expand_write};
+pub use report::*;
 
+mod access;
 pub mod busy;
 pub mod client;
+mod context;
 pub mod encoding;
 pub mod events;
 pub mod expand;
 pub mod invoker;
+mod report;
 pub mod subscriptions;
 
-/// Resource-utilisation metrics for the node, as reported by
-/// `GeneralDiagnostics::DeviceLoadStatus`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct DeviceLoad {
-    /// Subscriptions currently established on the node, across all fabrics.
-    pub current_subscriptions: u16,
-    /// Subscriptions currently established on the fabric of the reading
-    /// subject. Zero when the figures were gathered without a fabric in scope.
-    pub current_subscriptions_for_fabric: u16,
-    /// Subscriptions accepted since boot, including those since torn down.
-    pub total_subscriptions_established: u32,
-    /// Interaction Model messages sent since boot.
-    pub total_im_messages_sent: u32,
-    /// Interaction Model messages received since boot.
-    pub total_im_messages_received: u32,
-}
+/// The ID of the General Diagnostics cluster, and of its `BootReason` event.
+const GENERAL_DIAGNOSTICS_CLUSTER_ID: ClusterId = 0x0033;
+const BOOT_REASON_EVENT_ID: EventId = 0x03;
 
-/// Interaction-Model state threaded down to cluster handlers via
-/// [`HandlerContext::im_stats`](crate::dm::HandlerContext::im_stats).
-///
-pub trait ImStats: MaybeSendSync {
-    /// The node's resource-utilisation metrics, for
-    /// `GeneralDiagnostics::DeviceLoadStatus`.
-    ///
-    /// `fab_idx` is the fabric of the reading subject, for
-    /// `CurrentSubscriptionsForFabric`; pass `None` when no fabric is in scope.
-    fn device_load(&self, fab_idx: Option<NonZeroU8>) -> DeviceLoad;
-
-    /// Whether a live subscription exists on `fab_idx` whose subscriber node
-    /// matches `node_id`.
-    ///
-    /// The ICD Management handler uses it to decide which registered Check-In
-    /// clients have lost touch and need a Check-In.
-    fn has_subscription_for(&self, fab_idx: NonZeroU8, node_id: NodeId) -> bool;
-
-    /// Wait until a report to a subscriber fails to be delivered.
-    ///
-    /// The subscriber then no longer counts as subscribed for
-    /// [`has_subscription_for`](Self::has_subscription_for), and the ICD
-    /// Management handler uses this to nudge the registered clients that lost
-    /// touch with a Check-In right away, while the device is still awake, rather
-    /// than at its next wake-up.
-    ///
-    /// A single-waiter notification: exactly one task should wait on it.
-    fn wait_report_failed(&self) -> impl Future<Output = ()> + MaybeSend;
-
-    /// The earliest point at which a subscription needs a report to keep alive,
-    /// or `None` without subscriptions.
-    ///
-    /// The ICD Management handler wakes the device up no later than this, so
-    /// that the subscriptions keep alive with the device's own wake-ups rather
-    /// than wake it up themselves.
-    fn next_keep_alive_at(&self) -> Option<Instant>;
-}
-
-impl<T> ImStats for &T
-where
-    T: ImStats,
-{
-    fn device_load(&self, fab_idx: Option<NonZeroU8>) -> DeviceLoad {
-        (**self).device_load(fab_idx)
-    }
-
-    fn has_subscription_for(&self, fab_idx: NonZeroU8, node_id: NodeId) -> bool {
-        (**self).has_subscription_for(fab_idx, node_id)
-    }
-
-    async fn wait_report_failed(&self) {
-        (**self).wait_report_failed().await
-    }
-
-    fn next_keep_alive_at(&self) -> Option<Instant> {
-        (**self).next_keep_alive_at()
-    }
-}
+/// The ID of the Basic Information cluster, and of its `StartUp` and `ShutDown` events.
+const BASIC_INFORMATION_CLUSTER_ID: ClusterId = 0x0028;
+const START_UP_EVENT_ID: EventId = 0x00;
+const SHUT_DOWN_EVENT_ID: EventId = 0x01;
 
 /// An `ExchangeHandler` implementation capable of handling responder exchanges for the Interaction Model protocol.
 /// The mutable, owned-together state a [`InteractionModel`] operates on: the
@@ -485,21 +423,20 @@ where
         let emit = self.state.boot_emitted.lock(|flag| !flag.replace(true));
 
         if emit {
-            use crate::dm::clusters::decl::{basic_information, general_diagnostics};
-            use crate::dm::endpoints::ROOT_ENDPOINT_ID;
+            use crate::dm::ROOT_ENDPOINT_ID;
 
             // Failures are logged by `emit_u32_event`
             let _ = self.emit_u32_event(
                 ROOT_ENDPOINT_ID,
-                general_diagnostics::FULL_CLUSTER.id,
-                general_diagnostics::EventId::BootReason as _,
+                GENERAL_DIAGNOSTICS_CLUSTER_ID,
+                BOOT_REASON_EVENT_ID,
                 EventPriority::Critical,
                 self.matter.boot_reason() as _,
             );
             let _ = self.emit_u32_event(
                 ROOT_ENDPOINT_ID,
-                basic_information::FULL_CLUSTER.id,
-                basic_information::EventId::StartUp as _,
+                BASIC_INFORMATION_CLUSTER_ID,
+                START_UP_EVENT_ID,
                 EventPriority::Critical,
                 self.matter.dev_det().sw_ver,
             );
@@ -513,10 +450,16 @@ where
     /// keep [`Self::run`] going briefly so that subscribers get it: it is the
     /// last event the node should record.
     pub fn emit_shut_down(&self) -> Result<(), Error> {
-        crate::dm::clusters::decl::basic_information::ShutDown::emit_for(
-            self,
-            crate::dm::endpoints::ROOT_ENDPOINT_ID,
-            |event| event.end(),
+        // The event has no fields
+        self.emit_event(
+            crate::dm::ROOT_ENDPOINT_ID,
+            BASIC_INFORMATION_CLUSTER_ID,
+            SHUT_DOWN_EVENT_ID,
+            EventPriority::Critical,
+            |mut tw| {
+                tw.start_struct(&EVENT_DATA_TAG)?;
+                tw.end_container()
+            },
         )?;
 
         Ok(())
@@ -951,7 +894,7 @@ where
     /// publisher pushes `ReportData` messages on fresh inbound exchanges for the
     /// life of the subscription. Those exchanges land here (the `InteractionModel`
     /// owns all inbound IM traffic); we parse each chunk, hand it to the
-    /// `DataModel`'s [`ReportDataHandler`](crate::dm::ReportDataHandler) side, and
+    /// `DataModel`'s [`ReportDataHandler`](crate::im::ReportDataHandler) side, and
     /// reply `StatusResponse` — `Success` when the handler accepts, or the
     /// handler's chosen status (e.g. `InvalidSubscription`) when it disowns the
     /// report. A pure accessory's handler always disowns reports, so this is inert
@@ -979,7 +922,7 @@ where
                 let rx = exchange.rx()?;
                 let report = ReportDataResp::from_tlv(&TLVElement::new(rx.payload()))?;
 
-                let subscription = crate::dm::SubscriptionCtx {
+                let subscription = crate::im::SubscriptionCtx {
                     fabric_idx,
                     peer_node_id,
                     subscription_id: report.subscription_id,
@@ -989,7 +932,7 @@ where
                 // over a shared borrow of the exchange, valid only for the
                 // duration of this handler call — after which we resume the
                 // mutable ack/fetch loop below.
-                let ctx = crate::dm::ReportContextInstance::new(&*exchange, self, subscription);
+                let ctx = report::ReportContextInstance::new(&*exchange, self, subscription);
 
                 let result = self.report_handler.handle_report(ctx, &report).await;
 
@@ -1340,7 +1283,7 @@ where
     async fn process_subscription(
         &self,
         matter: &Matter<'_>,
-        rctx: &mut ReportContext<'_, '_, B, NS>,
+        rctx: &mut SubscriptionReport<'_, '_, B, NS>,
         send_if_empty: bool,
     ) -> Result<bool, Error> {
         // Route the report by the subscriber's `(fabric, node)`: reuse the best
@@ -1430,7 +1373,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn report_data(
         &self,
-        rctx: &mut ReportContext<'_, '_, B, NS>,
+        rctx: &mut SubscriptionReport<'_, '_, B, NS>,
         tx: &mut [u8],
         exchange: &mut Exchange<'_>,
         with_dataver: bool,
@@ -1674,8 +1617,8 @@ where
     K: KvBlobStoreAccess,
     R: MaybeSendSync,
 {
-    fn matter(&self) -> &Matter<'_> {
-        self.matter
+    fn utc_time(&self) -> UtcTime {
+        self.matter.with_state(|state| state.rtc.utc_time())
     }
 
     fn crypto(&self) -> impl Crypto + '_ {
@@ -2437,7 +2380,7 @@ where
             exchange
                 .matter()
                 .groupcast_testing()
-                .armed(crate::dm::clusters::groupcast::GroupcastTestingEnum::EnableListenerTesting)
+                .armed(crate::groupcast::TestingOperation::Listener)
                 .and_then(|mode| {
                     exchange
                         .with_state(|state| {
@@ -2455,10 +2398,10 @@ where
                                 return Ok(None);
                             }
 
-                            let src_ip = crate::dm::clusters::groupcast::TestingObservation::addr_ip(&sess.get_peer_addr());
+                            let src_ip = crate::groupcast::TestingObservation::addr_ip(&sess.get_peer_addr());
                             let group_id = *group_id;
                             let fab_idx = *fab_idx;
-                            let dst_ip = crate::dm::clusters::groupcast::TestingObservation::group_dst_ip(
+                            let dst_ip = crate::groupcast::TestingObservation::group_dst_ip(
                                 &state.fabrics,
                                 fab_idx,
                                 group_id,
@@ -2489,7 +2432,7 @@ where
                         .exchange()
                         .matter()
                         .groupcast_testing()
-                        .observe(crate::dm::clusters::groupcast::TestingObservation {
+                        .observe(crate::groupcast::TestingObservation {
                             src_ip: *src_ip,
                             dst_ip: Some(*dst_ip),
                             group_id: Some(*group_id),
@@ -2497,8 +2440,7 @@ where
                             cluster_id: Some(cmd.cluster_id),
                             element_id: Some(cmd.cmd_id),
                             access_allowed: Some(true),
-                            result:
-                                crate::dm::clusters::groupcast::GroupcastTestResultEnum::Success,
+                            result: crate::groupcast::TestResult::Success,
                         });
                 }
             }
@@ -2514,7 +2456,7 @@ where
                     .exchange()
                     .matter()
                     .groupcast_testing()
-                    .observe(crate::dm::clusters::groupcast::TestingObservation {
+                    .observe(crate::groupcast::TestingObservation {
                         src_ip,
                         dst_ip: Some(dst_ip),
                         group_id: Some(group_id),
@@ -2522,7 +2464,7 @@ where
                         cluster_id: None,
                         element_id: None,
                         access_allowed: Some(false),
-                        result: crate::dm::clusters::groupcast::GroupcastTestResultEnum::FailedAuth,
+                        result: crate::groupcast::TestResult::FailedAuth,
                     });
             }
         }

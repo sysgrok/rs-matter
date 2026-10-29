@@ -17,13 +17,33 @@
 
 //! This module contains the logic for generating the pairing code and the QR code for easy pairing.
 
-use crate::dm::clusters::basic_info::BasicInfoConfig;
+use crate::crypto::canon;
 use crate::error::Error;
 use crate::utils::bitflags::bitflags;
-use crate::BasicCommData;
 
 pub mod code;
 pub mod qr;
+
+/// The length of the setup passcode, in bytes.
+pub const SPAKE2P_VERIFIER_PASSWORD_LEN: usize = 4;
+
+canon!(
+    SPAKE2P_VERIFIER_PASSWORD_LEN,
+    SPAKE2P_VERIFIER_PASSWORD_ZEROED,
+    Spake2pVerifierPassword,
+    Spake2pVerifierPasswordRef
+);
+
+/// Device basic commissioning data
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct BasicCommData {
+    /// The password which is necessary to authenticate the device in either
+    /// initial commissioning, or when the basic commissioning window is opened
+    pub password: Spake2pVerifierPassword,
+    /// The 12-bit discriminator used to differentiate between multiple devices
+    pub discriminator: u16,
+}
 
 bitflags! {
     #[repr(transparent)]

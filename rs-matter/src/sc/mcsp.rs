@@ -38,6 +38,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fmt::Bytes;
 use crate::sc::{check_opcode, OpCode};
 use crate::transport::exchange::Exchange;
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::SessionMode;
 use crate::utils::storage::WriteBuf;
 

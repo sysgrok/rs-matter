@@ -117,6 +117,7 @@ const NODE: Node<'static> = Node {
 };
 
 fn device_data_model<'a>(
+    matter: &'a Matter<'a>,
     mut rand: impl Rng + Copy,
     on_off: &'a on_off::OnOffHandler<'a, TestOnOffDeviceLogic, on_off::NoLevelControl>,
 ) -> impl DataModel + 'a {
@@ -124,7 +125,7 @@ fn device_data_model<'a>(
         NODE,
         endpoints::EthSysHandlerBuilder::new()
             .netif_diag(&UnixNetifs)
-            .build(rand)
+            .build(matter, rand)
             .chain(
                 |e, c| e == ENDPOINT && c == desc::DescHandler::CLUSTER.id,
                 Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
@@ -437,7 +438,7 @@ async fn run_fabric_survives_reboot() {
         &device_matter,
         &device_crypto,
         &buffers,
-        device_data_model(rand, &on_off_handler),
+        device_data_model(&device_matter, rand, &on_off_handler),
         &device_kv,
         &state,
     );

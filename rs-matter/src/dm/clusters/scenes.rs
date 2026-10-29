@@ -38,8 +38,8 @@ use core::future::{ready, Future};
 use core::num::NonZeroU8;
 
 use crate::dm::{
-    ArrayAttributeRead, AttrId, Cluster, ClusterId, Dataver, EndptId, HandlerContext,
-    InvokeContext, LifecycleOp, ReadContext, SceneId,
+    ArrayAttributeRead, AttrId, Cluster, ClusterId, Dataver, EndptId, GroupMembership,
+    HandlerContext, InvokeContext, LifecycleOp, ReadContext, SceneId,
 };
 use crate::error::{Error, ErrorCode};
 use crate::persist::{KvBlobStore, KvBlobStoreAccess, Persist};
@@ -671,10 +671,14 @@ impl<const N: usize, const M: usize> ScenesState<N, M> {
 /// ```ignore
 /// let scenes = ScenesHandler::new(
 ///     dataver,
+///     &matter,
 ///     &scenes_state,
 ///     (&on_off_handler, (&level_control_handler, ())),
 /// );
 /// ```
+///
+/// The group membership of the scenes is checked against `groups` (usually the
+/// `Matter` instance).
 ///
 /// The default `R = ()` builds a Scenes handler with no scene-aware
 /// clusters — useful for testing the table-management commands in
@@ -684,6 +688,7 @@ where
     R: SceneClusters,
 {
     dataver: Dataver,
+    groups: &'a dyn GroupMembership,
     state: &'a ScenesState<N, M>,
     clusters: R,
 }
@@ -692,9 +697,15 @@ impl<'a, const N: usize, R, const M: usize> ScenesHandler<'a, N, R, M>
 where
     R: SceneClusters,
 {
-    pub const fn new(dataver: Dataver, state: &'a ScenesState<N, M>, clusters: R) -> Self {
+    pub const fn new(
+        dataver: Dataver,
+        groups: &'a dyn GroupMembership,
+        state: &'a ScenesState<N, M>,
+        clusters: R,
+    ) -> Self {
         Self {
             dataver,
+            groups,
             state,
             clusters,
         }
@@ -705,7 +716,7 @@ where
     }
 
     fn fab_idx<C: InvokeContext>(ctx: &C) -> Result<NonZeroU8, Error> {
-        ctx.accessor()?.fab_idx()
+        NonZeroU8::new(ctx.cmd().fab_idx).ok_or(ErrorCode::UnsupportedAccess.into())
     }
 
     /// Per-fabric `RemainingCapacity` for `GetSceneMembership` and
@@ -724,8 +735,8 @@ where
     /// Table for `(fab_idx, endpoint_id)`. `group_id == 0` ("no
     /// group") is always valid. Group-aware Scenes commands return
     /// `INVALID_COMMAND` on `false`.
-    fn group_in_table<C: InvokeContext>(
-        ctx: &C,
+    fn group_in_table(
+        &self,
         fab_idx: NonZeroU8,
         endpoint_id: EndptId,
         group_id: u16,
@@ -734,25 +745,7 @@ where
             return Ok(true);
         }
 
-        #[cfg(feature = "groups")]
-        {
-            ctx.exchange().with_state(|state| {
-                let fabric = state.fabrics.fabric(fab_idx)?;
-                Ok(fabric
-                    .groups()
-                    .get(group_id)
-                    .map(|g| g.endpoints.contains(&endpoint_id))
-                    .unwrap_or(false))
-            })
-        }
-
-        // Without multicast group support a non-zero group can never be in the
-        // (empty) group table.
-        #[cfg(not(feature = "groups"))]
-        {
-            let _ = (ctx, fab_idx, endpoint_id);
-            Ok(false)
-        }
+        self.groups.is_member(fab_idx, group_id, endpoint_id)
     }
 
     /// Stamp `(endpoint, group, scene)` as the recalled scene for
@@ -943,7 +936,8 @@ where
         builder: ArrayAttributeRead<SceneInfoStructArrayBuilder<P>, SceneInfoStructBuilder<P>>,
     ) -> Result<P, Error> {
         let endpoint_id = ctx.attr().endpoint_id;
-        let accessor_fab_idx = ctx.accessor()?.fab_idx()?;
+        let accessor_fab_idx =
+            NonZeroU8::new(ctx.attr().fab_idx).ok_or(ErrorCode::UnsupportedAccess)?;
 
         // Snapshot the relevant scalars under a single lock, then
         // build the response outside the lock. A fabric gets a row
@@ -1026,7 +1020,7 @@ where
                 .end();
         }
 
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_id)? {
+        if !self.group_in_table(fab_idx, endpoint_id, group_id)? {
             return response
                 .status(SC_INVALID_COMMAND)?
                 .group_id(group_id)?
@@ -1191,7 +1185,7 @@ where
                 .end();
         }
 
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_id)? {
+        if !self.group_in_table(fab_idx, endpoint_id, group_id)? {
             return response
                 .status(SC_INVALID_COMMAND)?
                 .group_id(group_id)?
@@ -1273,7 +1267,7 @@ where
                 .end();
         }
 
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_id)? {
+        if !self.group_in_table(fab_idx, endpoint_id, group_id)? {
             return response
                 .status(SC_INVALID_COMMAND)?
                 .group_id(group_id)?
@@ -1317,7 +1311,7 @@ where
         let endpoint_id = ctx.cmd().endpoint_id;
         let group_id = request.group_id()?;
 
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_id)? {
+        if !self.group_in_table(fab_idx, endpoint_id, group_id)? {
             return response
                 .status(SC_INVALID_COMMAND)?
                 .group_id(group_id)?
@@ -1367,7 +1361,7 @@ where
                 .end();
         }
 
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_id)? {
+        if !self.group_in_table(fab_idx, endpoint_id, group_id)? {
             return response
                 .status(SC_INVALID_COMMAND)?
                 .group_id(group_id)?
@@ -1468,7 +1462,7 @@ where
             return Err(ErrorCode::ConstraintError.into());
         }
 
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_id)? {
+        if !self.group_in_table(fab_idx, endpoint_id, group_id)? {
             return Err(ErrorCode::InvalidCommand.into());
         }
 
@@ -1532,7 +1526,7 @@ where
 
         // Reject unknown group with `INVALID_COMMAND`; spec allows
         // `null` for `Capacity` on this failure path.
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_id)? {
+        if !self.group_in_table(fab_idx, endpoint_id, group_id)? {
             return response
                 .status(SC_INVALID_COMMAND)?
                 .capacity(Nullable::none())?
@@ -1599,8 +1593,8 @@ where
                 .end();
         }
 
-        if !Self::group_in_table(ctx, fab_idx, endpoint_id, group_from)?
-            || !Self::group_in_table(ctx, fab_idx, endpoint_id, group_to)?
+        if !self.group_in_table(fab_idx, endpoint_id, group_from)?
+            || !self.group_in_table(fab_idx, endpoint_id, group_to)?
         {
             return response
                 .status(SC_INVALID_COMMAND)?

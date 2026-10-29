@@ -17,15 +17,19 @@
 
 //! Credential verification for Matter device attestation.
 //!
-//! This module provides controller-side verification logic for device attestation
-//! during commissioning. It includes:
+//! This module provides the [`DeviceAttestation`] data of a device, and the
+//! controller-side verification logic for device attestation during
+//! commissioning. It includes:
 //!
 //! - [`cd`]: Certification Declaration (CD) parsing, signature verification, and
 //!   content validation per Matter Spec.
 //! - [`cd_keys`]: Well-known CSA CD signing key trust store.
 
+pub use dev_att::*;
+
 pub mod cd;
 pub mod cd_keys;
+mod dev_att;
 pub mod trust_store;
 
 #[cfg(test)]

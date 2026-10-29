@@ -618,7 +618,7 @@ fn run_im_scenario(
         rs_matter::persist::VENDOR_KEYS_START + 0x10,
         TestOnOffDeviceLogic::new(false),
     );
-    let handler = E2eTestHandler::new(rand, on_off_handler);
+    let handler = E2eTestHandler::new(&device, rand, on_off_handler);
 
     let kv = device.kv(DummyKvBlobStore);
     let dm = InteractionModel::new(&device, &crypto, &buffers, &handler, &kv, &state);

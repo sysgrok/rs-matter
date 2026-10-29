@@ -56,7 +56,6 @@ mod groups {
 
     use cfg_if::cfg_if;
 
-    use crate::dm::clusters::decl::groupcast::MulticastAddrPolicyEnum;
     use crate::error::{Error, ErrorCode};
     use crate::group_keys::GroupKeySet;
     use crate::tlv::{FromTLV, ToTLV};
@@ -159,7 +158,23 @@ mod groups {
         /// which behaves like the `PerGroup` policy (such nodes join the
         /// fabric+group-scoped multicast address) - the `PerGroup` policy
         /// exists precisely for interop with them.
-        pub mcast_policy: Option<MulticastAddrPolicyEnum>,
+        pub mcast_policy: Option<MulticastAddrPolicy>,
+    }
+
+    /// The multicast address policy of a group.
+    ///
+    /// The values are the ones of the Groupcast cluster.
+    #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, FromTLV, ToTLV)]
+    #[tlvargs(datatype = "u8")]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+    #[repr(u8)]
+    pub enum MulticastAddrPolicy {
+        /// The group uses the IANA-assigned Groupcast multicast address.
+        #[enumval(0)]
+        IanaAddr = 0,
+        /// The group uses a multicast address computed from its fabric and group IDs.
+        #[enumval(1)]
+        PerGroup = 1,
     }
 
     impl GroupEndpointMapping {
@@ -171,9 +186,8 @@ mod groups {
 
         /// The effective multicast-address policy of the group (legacy
         /// Groups-cluster entries behave as `PerGroup`).
-        pub fn effective_mcast_policy(&self) -> MulticastAddrPolicyEnum {
-            self.mcast_policy
-                .unwrap_or(MulticastAddrPolicyEnum::PerGroup)
+        pub fn effective_mcast_policy(&self) -> MulticastAddrPolicy {
+            self.mcast_policy.unwrap_or(MulticastAddrPolicy::PerGroup)
         }
 
         /// Whether the group is managed by the Groupcast cluster (as opposed
@@ -407,7 +421,7 @@ mod groups {
             group_id: u16,
             endpoints: &[u16],
             replace: bool,
-            mcast_policy: Option<MulticastAddrPolicyEnum>,
+            mcast_policy: Option<MulticastAddrPolicy>,
         ) -> Result<(), Error> {
             let entry = if let Some(entry) = self
                 .endpoint_mapping
@@ -422,9 +436,7 @@ mod groups {
                         endpoints: Vec::new(),
                         group_name: String::new(),
                         has_aux_acl: Some(false),
-                        mcast_policy: Some(
-                            mcast_policy.unwrap_or(MulticastAddrPolicyEnum::IanaAddr),
-                        ),
+                        mcast_policy: Some(mcast_policy.unwrap_or(MulticastAddrPolicy::IanaAddr)),
                     })
                     .map_err(|_| ErrorCode::ResourceExhausted)?;
                 unwrap!(self.endpoint_mapping.last_mut())
@@ -434,7 +446,7 @@ mod groups {
             // Groupcast-managed (the default policy matches the legacy
             // behavior)
             if entry.mcast_policy.is_none() {
-                entry.mcast_policy = Some(MulticastAddrPolicyEnum::PerGroup);
+                entry.mcast_policy = Some(MulticastAddrPolicy::PerGroup);
             }
 
             if let Some(mcast_policy) = mcast_policy {
@@ -3188,8 +3200,8 @@ pub(crate) mod tests {
     #[cfg(feature = "groups")]
     mod groups {
         use crate::crypto::{CanonAeadKey, CanonAeadKeyRef, AEAD_CANON_KEY_LEN};
-        use crate::dm::clusters::decl::groupcast::MulticastAddrPolicyEnum;
         use crate::error::ErrorCode;
+        use crate::fabric::MulticastAddrPolicy;
         use crate::fabric::{
             GroupKeyMapping, Groups, GROUP_ENDPOINTS_PER_FABRIC, MAX_GROUPS_PER_FABRIC,
             MAX_GROUP_KEYS_PER_FABRIC, MAX_GROUP_NAME_LEN,
@@ -3397,7 +3409,7 @@ pub(crate) mod tests {
             assert!(!entry.groupcast_managed());
             assert!(matches!(
                 entry.effective_mcast_policy(),
-                MulticastAddrPolicyEnum::PerGroup
+                MulticastAddrPolicy::PerGroup
             ));
 
             let ids: std::vec::Vec<_> = groups.iter().map(|e| e.group_id).collect();
@@ -3492,23 +3504,18 @@ pub(crate) mod tests {
             assert!(!entry.has_aux_acl());
             assert!(matches!(
                 entry.effective_mcast_policy(),
-                MulticastAddrPolicyEnum::IanaAddr
+                MulticastAddrPolicy::IanaAddr
             ));
 
             // Appending dedupes; replacing swaps the list; policy updates when given
             groups
-                .groupcast_join(
-                    0x100,
-                    &[2, 3],
-                    false,
-                    Some(MulticastAddrPolicyEnum::PerGroup),
-                )
+                .groupcast_join(0x100, &[2, 3], false, Some(MulticastAddrPolicy::PerGroup))
                 .unwrap();
             let entry = groups.get(0x100).unwrap();
             assert_eq!(entry.endpoints.as_slice(), &[1, 2, 3]);
             assert!(matches!(
                 entry.effective_mcast_policy(),
-                MulticastAddrPolicyEnum::PerGroup
+                MulticastAddrPolicy::PerGroup
             ));
 
             groups.groupcast_join(0x100, &[9], true, None).unwrap();
@@ -3516,7 +3523,7 @@ pub(crate) mod tests {
             assert_eq!(entry.endpoints.as_slice(), &[9]);
             assert!(matches!(
                 entry.effective_mcast_policy(),
-                MulticastAddrPolicyEnum::PerGroup
+                MulticastAddrPolicy::PerGroup
             ));
 
             // A sender-only membership has no endpoints but still exists
@@ -3534,7 +3541,7 @@ pub(crate) mod tests {
             assert_eq!(entry.group_name.as_str(), "legacy");
             assert!(matches!(
                 entry.effective_mcast_policy(),
-                MulticastAddrPolicyEnum::PerGroup
+                MulticastAddrPolicy::PerGroup
             ));
 
             // Endpoint removal keeps an emptied Groupcast-managed entry around

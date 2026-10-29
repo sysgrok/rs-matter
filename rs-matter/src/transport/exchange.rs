@@ -16,6 +16,7 @@
  */
 
 use core::fmt::{self, Display};
+use core::future::Future;
 use core::num::NonZeroU8;
 use core::pin::pin;
 
@@ -33,6 +34,7 @@ use crate::transport::{TransportPreference, TxPayloadState};
 use crate::utils::futures::{select, select3, Either, Either3};
 use crate::utils::storage::pooled::{PooledBuffers, DEFAULT_BUFFER_POOL_SIZE};
 use crate::utils::storage::{Vec, WriteBuf};
+use crate::utils::sync::{MaybeSend, MaybeSendSync};
 use crate::utils::timers::{Duration, Instant, Timer};
 use crate::{Matter, MatterState};
 
@@ -50,10 +52,12 @@ use super::{PacketAccess, MAX_RX_BUF_SIZE, MAX_TX_BUF_SIZE};
 /// When the `large-buffers` feature is enabled, this tracks the larger TCP-capable packet
 /// size, so that IM-level buffers (e.g. `IMBuffer`) can absorb a full Matter-over-TCP
 /// message. Otherwise it stays at the UDP-sized default.
+pub const MAX_EXCHANGE_RX_BUF_SIZE: usize = crate::dm::IM_BUFFER_SIZE;
+
 #[cfg(feature = "large-buffers")]
-pub const MAX_EXCHANGE_RX_BUF_SIZE: usize = network::MAX_RX_LARGE_PACKET_SIZE;
+const _: () = core::assert!(MAX_EXCHANGE_RX_BUF_SIZE == network::MAX_RX_LARGE_PACKET_SIZE);
 #[cfg(not(feature = "large-buffers"))]
-pub const MAX_EXCHANGE_RX_BUF_SIZE: usize = network::MAX_RX_PACKET_SIZE;
+const _: () = core::assert!(MAX_EXCHANGE_RX_BUF_SIZE == network::MAX_RX_PACKET_SIZE);
 
 /// Maximum buffer which should be allocated and used by user code that wants to send messages via `Exchange::send`
 ///
@@ -68,55 +72,143 @@ pub const MAX_EXCHANGE_TX_BUF_SIZE: usize =
 /// A protocol payload buffer, sized to hold a full exchange RX message
 /// ([`MAX_EXCHANGE_RX_BUF_SIZE`]).
 ///
-/// This is the central buffer type that both [`IMBuffer`](crate::im::IMBuffer)
-/// and [`BdxBuffer`](crate::bdx::BdxBuffer) alias, so a single
+/// This is the [`IMBuffer`](crate::dm::IMBuffer), which
+/// [`BdxBuffer`](crate::bdx::BdxBuffer) aliases too, so that a single
 /// [`PooledBuffers`](crate::utils::storage::pooled::PooledBuffers) pool can be
 /// shared across the data model and BDX.
-pub type Buffer = crate::utils::storage::Vec<u8, MAX_EXCHANGE_RX_BUF_SIZE>;
+pub type Buffer = crate::dm::IMBuffer;
 
 /// A [`PooledBuffers`] pool pre-configured with Matter defaults: it holds
 /// [`Buffer`]s (the central exchange-sized buffer) and [`DEFAULT_BUFFER_POOL_SIZE`]
 /// of them, behind the default Matter raw mutex.
 pub type MatterBuffers<const N: usize = DEFAULT_BUFFER_POOL_SIZE> = PooledBuffers<Buffer, N>;
 
-/// An exchange identifier, uniquely identifying a session and an exchange within that session for a given Matter stack.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct ExchangeId(u32);
+pub use crate::dm::ExchangeId;
 
-impl ExchangeId {
-    pub(crate) fn new(session_id: u32, exchange_index: usize) -> Self {
-        if session_id > 0x0fff_ffff {
-            panic!("Session ID out of range");
-        }
+/// A trait modeling a generic handler for an exchange.
+///
+/// The handler takes ownership of the exchange: once handling is done, the only
+/// thing left to do with the exchange is to drop it (which ends it).
+pub trait ExchangeHandler: MaybeSendSync {
+    fn handle(&self, exchange: Exchange<'_>)
+        -> impl Future<Output = Result<(), Error>> + MaybeSend;
+}
 
-        if exchange_index >= 16 {
-            panic!("Exchange index out of range");
-        }
-
-        Self(((exchange_index as u32) << 28) | session_id)
+impl<T> ExchangeHandler for &T
+where
+    T: ExchangeHandler,
+{
+    fn handle(&self, exchange: Exchange<'_>) -> impl Future<Output = Result<(), Error>> {
+        (*self).handle(exchange)
     }
+}
 
-    pub(crate) fn session_id(&self) -> u32 {
-        self.0 & 0x0fff_ffff
-    }
-
-    pub(crate) fn exchange_index(&self) -> usize {
-        (self.0 >> 28) as _
-    }
-
+/// Resolves an [`ExchangeId`] against the session table and the state of a
+/// [`Matter`] instance.
+pub trait ExchangeIdExt {
     /// Get the session associated with this exchange from the given sessions store.
     ///
     /// ATTENTION: This method will panic if the session is not found in the store, so make sure to only call it when you are sure the session exists.
-    pub(crate) fn session<'a>(&self, sessions: &'a mut Sessions) -> &'a mut Session {
+    fn session<'a>(&self, sessions: &'a mut Sessions) -> &'a mut Session;
+
+    /// The accessor of the session of the exchange.
+    fn accessor<'a>(
+        &self,
+        matter: &'a Matter<'a>,
+        aux_acl_enabled: bool,
+    ) -> Result<Accessor<'a>, Error>;
+
+    /// Run `f` with the state of `matter`, or fail with [`ErrorCode::NoSession`]
+    /// if the session of the exchange no longer exists.
+    fn with_state<'a, F, T>(&self, matter: &'a Matter<'a>, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&mut MatterState) -> Result<T, Error>;
+
+    /// Like [`Self::with_state`], for a closure with an error type of its own.
+    fn with_state_ex<'a, F, T, E>(&self, matter: &'a Matter<'a>, f: F) -> Result<T, E>
+    where
+        F: FnOnce(&mut MatterState) -> Result<T, E>,
+        E: From<Error>;
+
+    /// The node ID of the peer of the session of the exchange, if the session
+    /// has one.
+    fn peer_node_id<'a>(&self, matter: &'a Matter<'a>) -> Result<Option<NodeId>, Error> {
+        self.with_state(matter, |state| {
+            Ok(self.session(&mut state.sessions).get_peer_node_id())
+        })
+    }
+}
+
+impl ExchangeIdExt for ExchangeId {
+    fn session<'a>(&self, sessions: &'a mut Sessions) -> &'a mut Session {
         unwrap!(sessions.get(self.session_id()))
     }
 
+    fn accessor<'a>(
+        &self,
+        matter: &'a Matter<'a>,
+        aux_acl_enabled: bool,
+    ) -> Result<Accessor<'a>, Error> {
+        self.with_state(matter, |state| {
+            let sess = self.session(&mut state.sessions);
+
+            Ok(Accessor::for_session(sess, matter, aux_acl_enabled))
+        })
+    }
+
+    fn with_state<'a, F, T>(&self, matter: &'a Matter<'a>, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&mut MatterState) -> Result<T, Error>,
+    {
+        self.with_state_ex(matter, f)
+    }
+
+    fn with_state_ex<'a, F, T, E>(&self, matter: &'a Matter<'a>, f: F) -> Result<T, E>
+    where
+        F: FnOnce(&mut MatterState) -> Result<T, E>,
+        E: From<Error>,
+    {
+        matter.with_state(|state| {
+            if state.sessions.get(self.session_id()).is_some() {
+                f(state)
+            } else {
+                warn!("Exchange {}: No session", self);
+                Err(Error::from(ErrorCode::NoSession).into())
+            }
+        })
+    }
+}
+
+/// The operations on an [`ExchangeId`] that the transport uses internally.
+pub(crate) trait ExchangeIdInternal {
     /// Get the exchange state associated with this exchange from the given sessions store.
-    pub(crate) fn exch<'a>(&self, session: &'a mut Session) -> &'a mut ExchangeState {
+    fn exch<'a>(&self, session: &'a mut Session) -> &'a mut ExchangeState;
+
+    fn display<'a>(&'a self, session: &'a Session) -> ExchangeIdDisplay<'a>;
+
+    async fn recv<'a>(&self, matter: &'a Matter<'a>) -> Result<RxMessage<'a>, Error>;
+
+    async fn init_send<'a>(&self, matter: &'a Matter<'a>) -> Result<TxMessage<'a>, Error>;
+
+    async fn wait_tx<'a>(&self, matter: &'a Matter<'a>) -> Result<TxOutcome, Error>;
+
+    async fn internal_wait_ack<'a>(&self, matter: &'a Matter<'a>) -> Result<(), Error>;
+
+    fn retrans_delay_ms<'a>(&self, matter: &'a Matter<'a>) -> Result<Option<u64>, Error>;
+
+    fn check_no_pending_retrans<'a>(&self, matter: &'a Matter<'a>) -> Result<(), Error>;
+
+    fn pending_retrans<'a>(&self, matter: &'a Matter<'a>) -> Result<bool, Error>;
+
+    fn pending_ack<'a>(&self, matter: &'a Matter<'a>) -> Result<bool, Error>;
+}
+
+impl ExchangeIdInternal for ExchangeId {
+    fn exch<'a>(&self, session: &'a mut Session) -> &'a mut ExchangeState {
         unwrap!(session.exchanges[self.exchange_index()].as_mut())
     }
 
-    pub(crate) fn display<'a>(&'a self, session: &'a Session) -> ExchangeIdDisplay<'a> {
+    fn display<'a>(&'a self, session: &'a Session) -> ExchangeIdDisplay<'a> {
         ExchangeIdDisplay { id: self, session }
     }
 
@@ -257,40 +349,6 @@ impl ExchangeId {
         }
     }
 
-    fn accessor<'a>(
-        &self,
-        matter: &'a Matter<'a>,
-        aux_acl_enabled: bool,
-    ) -> Result<Accessor<'a>, Error> {
-        self.with_state(matter, |state| {
-            let sess = self.session(&mut state.sessions);
-
-            Ok(Accessor::for_session(sess, matter, aux_acl_enabled))
-        })
-    }
-
-    fn with_state<'a, F, T>(&self, matter: &'a Matter<'a>, f: F) -> Result<T, Error>
-    where
-        F: FnOnce(&mut MatterState) -> Result<T, Error>,
-    {
-        self.with_state_ex(matter, f)
-    }
-
-    fn with_state_ex<'a, F, T, E>(&self, matter: &'a Matter<'a>, f: F) -> Result<T, E>
-    where
-        F: FnOnce(&mut MatterState) -> Result<T, E>,
-        E: From<Error>,
-    {
-        matter.with_state(|state| {
-            if state.sessions.get(self.session_id()).is_some() {
-                f(state)
-            } else {
-                warn!("Exchange {}: No session", self);
-                Err(Error::from(ErrorCode::NoSession).into())
-            }
-        })
-    }
-
     async fn internal_wait_ack<'a>(&self, matter: &'a Matter<'a>) -> Result<(), Error> {
         matter
             .transport
@@ -342,19 +400,6 @@ impl ExchangeId {
 
             Ok(exch.mrp.is_ack_pending())
         })
-    }
-}
-
-impl Display for ExchangeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}::{}", self.session_id(), self.exchange_index())
-    }
-}
-
-#[cfg(feature = "defmt")]
-impl defmt::Format for ExchangeId {
-    fn format(&self, f: defmt::Formatter<'_>) {
-        defmt::write!(f, "{}::{}", self.session_id(), self.exchange_index())
     }
 }
 
@@ -621,6 +666,13 @@ impl MessageMeta {
         self.proto_id == PROTO_ID_SECURE_CHANNEL
             && (self.proto_opcode == sc::OpCode::MsgCounterSyncReq as u8
                 || self.proto_opcode == sc::OpCode::MsgCounterSyncResp as u8)
+    }
+}
+
+impl From<im::OpCode> for MessageMeta {
+    /// All IM messages are reliable.
+    fn from(opcode: im::OpCode) -> Self {
+        Self::new(PROTO_ID_INTERACTION_MODEL, opcode as u8, true)
     }
 }
 
@@ -1645,14 +1697,6 @@ impl<'a> Exchange<'a> {
     {
         self.id.with_state(self.matter, f)
     }
-
-    pub(crate) fn with_state_ex<F, T, E>(&self, f: F) -> Result<T, E>
-    where
-        F: FnOnce(&mut MatterState) -> Result<T, E>,
-        E: From<Error>,
-    {
-        self.id.with_state_ex(self.matter, f)
-    }
 }
 
 impl Drop for Exchange<'_> {
@@ -1709,6 +1753,14 @@ mod tests {
 
     fn test_matter() -> Matter<'static> {
         Matter::new(&TEST_DEV_DET, TEST_DEV_COMM, &TEST_DEV_ATT, 0)
+    }
+
+    #[test]
+    fn im_opcode_meta() {
+        let meta: MessageMeta = im::OpCode::ReadRequest.into();
+        assert_eq!(meta.proto_id, PROTO_ID_INTERACTION_MODEL);
+        assert_eq!(meta.proto_opcode, 2);
+        assert!(meta.reliable);
     }
 
     fn fill_sessions(matter: &Matter<'_>, reserved: bool) {

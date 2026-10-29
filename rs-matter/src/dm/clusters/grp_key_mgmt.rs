@@ -21,6 +21,8 @@
 use core::num::NonZeroU8;
 
 #[cfg(feature = "groups")]
+use crate::acl::Accessor;
+#[cfg(feature = "groups")]
 use crate::crypto::AEAD_CANON_KEY_LEN;
 use crate::dm::{
     ArrayAttributeRead, ArrayAttributeWrite, Cluster, Dataver, InvokeContext, ReadContext,
@@ -34,21 +36,27 @@ use crate::fabric::{
 #[cfg(feature = "groups")]
 use crate::group_keys::{GroupEpochKeyEntry, GroupKeySet};
 use crate::tlv::{Nullable, Octets, TLVArray, TLVBuilderParent};
-use crate::with;
+#[cfg(feature = "groups")]
+use crate::transport::exchange::ExchangeIdExt as _;
+use crate::{with, Matter};
 
 pub use crate::dm::clusters::decl::group_key_management::*;
 
 /// The system implementation of a handler for the Group Key Management Matter cluster.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct GrpKeyMgmtHandler {
+pub struct GrpKeyMgmtHandler<'a> {
     dataver: Dataver,
+    // Without multicast group support there are no group keys to manage
+    #[cfg_attr(not(feature = "groups"), allow(dead_code))]
+    matter: &'a Matter<'a>,
 }
 
-impl GrpKeyMgmtHandler {
-    /// Creates a new instance of the `GrpKeyMgmtHandler` with the given `Dataver`.
-    pub const fn new(dataver: Dataver) -> Self {
-        Self { dataver }
+impl<'a> GrpKeyMgmtHandler<'a> {
+    /// Creates a new instance of the `GrpKeyMgmtHandler` with the given `Dataver`,
+    /// managing the group keys of `matter`.
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>) -> Self {
+        Self { dataver, matter }
     }
 
     /// Adapt the handler instance to the generic `rs-matter` `Handler` trait
@@ -60,7 +68,7 @@ impl GrpKeyMgmtHandler {
 /// The full Group Key Management implementation, backing multicast group keys
 /// and the group→keyset map on top of the fabric's group state.
 #[cfg(feature = "groups")]
-impl ClusterHandler for GrpKeyMgmtHandler {
+impl ClusterHandler for GrpKeyMgmtHandler<'_> {
     const CLUSTER: Cluster<'static> = FULL_CLUSTER.with_attrs(with!(required));
 
     fn dataver(&self) -> u32 {
@@ -78,7 +86,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
     ) -> Result<P, Error> {
         let attr = ctx.attr();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let mut entries = state
                 .fabrics
                 .iter()
@@ -127,7 +135,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
     ) -> Result<P, Error> {
         let attr = ctx.attr();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let mut entries = state
                 .fabrics
                 .iter()
@@ -192,7 +200,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
 
         let mut persist = FabricPersist::new(ctx.kv());
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             match value {
@@ -252,7 +260,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
                 persist.store(fabric)?;
             }
 
-            ctx.exchange().matter().transport().notify_groups_changed();
+            self.matter.transport().notify_groups_changed();
 
             Ok(())
         })?;
@@ -265,7 +273,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
         ctx: impl InvokeContext,
         request: KeySetWriteRequest<'_>,
     ) -> Result<(), Error> {
-        let fab_idx = ctx.accessor()?.fab_idx()?;
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
         let key_set = request.group_key_set()?;
 
         let group_key_set_id = key_set.group_key_set_id()?;
@@ -403,7 +411,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
 
         let mut persist = FabricPersist::new(ctx.kv());
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             fabric.groups_mut().key_set_add(entry)?;
@@ -415,7 +423,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
                 persist.store(fabric)?;
             }
 
-            ctx.exchange().matter().transport().notify_groups_changed();
+            self.matter.transport().notify_groups_changed();
 
             Ok(())
         })?;
@@ -431,10 +439,10 @@ impl ClusterHandler for GrpKeyMgmtHandler {
         request: KeySetReadRequest<'_>,
         response: KeySetReadResponseBuilder<P>,
     ) -> Result<P, Error> {
-        let fab_idx = ctx.accessor()?.fab_idx()?;
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
         let group_key_set_id = request.group_key_set_id()?;
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric(fab_idx)?;
 
             // KeySet ID 0 is the IPK (Identity Protection Key); per Matter
@@ -512,7 +520,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
         ctx: impl InvokeContext,
         request: KeySetRemoveRequest<'_>,
     ) -> Result<(), Error> {
-        let fab_idx = ctx.accessor()?.fab_idx()?;
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
         let group_key_set_id = request.group_key_set_id()?;
 
         // KeySetRemove of ID 0 (IPK) is not allowed
@@ -522,7 +530,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
 
         let mut persist = FabricPersist::new(ctx.kv());
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             fabric.groups_mut().key_set_remove(group_key_set_id)?;
@@ -534,7 +542,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
                 persist.store(fabric)?;
             }
 
-            ctx.exchange().matter().transport().notify_groups_changed();
+            self.matter.transport().notify_groups_changed();
 
             Ok(())
         })?;
@@ -549,9 +557,9 @@ impl ClusterHandler for GrpKeyMgmtHandler {
         ctx: impl InvokeContext,
         response: KeySetReadAllIndicesResponseBuilder<P>,
     ) -> Result<P, Error> {
-        let fab_idx = ctx.accessor()?.fab_idx()?;
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric(fab_idx)?;
 
             // Always include IPK (0) plus all stored key set IDs
@@ -574,7 +582,7 @@ impl ClusterHandler for GrpKeyMgmtHandler {
 /// no-ops, and `KeySetRead` reports not-found. The IPK (key set 0) is delivered
 /// out of band via `AddNOC`, so commissioning and operation are unaffected.
 #[cfg(not(feature = "groups"))]
-impl ClusterHandler for GrpKeyMgmtHandler {
+impl ClusterHandler for GrpKeyMgmtHandler<'_> {
     const CLUSTER: Cluster<'static> = FULL_CLUSTER.with_attrs(with!(required));
 
     fn dataver(&self) -> u32 {

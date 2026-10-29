@@ -18,8 +18,8 @@
 use core::future::Future;
 
 use crate::error::*;
-use crate::respond::ExchangeHandler;
 use crate::transport::exchange::Exchange;
+use crate::transport::exchange::ExchangeHandler;
 
 use super::{sc_write, OpCode, SCStatusCodes, PROTO_ID_SECURE_CHANNEL};
 

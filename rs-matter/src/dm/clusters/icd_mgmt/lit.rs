@@ -21,9 +21,10 @@
 use core::num::NonZeroU8;
 use core::pin::pin;
 
-use crate::acl::AccessReq;
+use crate::acl::{AccessReq, Accessor};
 use crate::crypto::{CanonAeadKey, Crypto, Rng};
 use crate::dm::endpoints::ROOT_ENDPOINT_ID;
+use crate::dm::ImStats;
 use crate::dm::{
     Access, ArrayAttributeRead, Cluster, Dataver, HandlerContext, InvokeContext, LifecycleOp,
     ReadContext,
@@ -31,7 +32,6 @@ use crate::dm::{
 use crate::error::{Error, ErrorCode};
 use crate::fabric::MAX_FABRICS;
 use crate::im::encoding::GenericPath;
-use crate::im::ImStats;
 use crate::persist::{
     load_logged, KvBlobStore, KvBlobStoreAccess, Persist, ICD_CHECK_IN_COUNTER_KEY,
     ICD_REGISTERED_CLIENTS_KEY,
@@ -626,7 +626,11 @@ impl CheckIns for LitIcd {
     /// Best-effort per client, with a timeout per send so that an unresolvable
     /// client cannot keep the device awake. Withheld while the counter cannot
     /// be persisted.
-    async fn send_check_ins(&self, ctx: impl HandlerContext) -> Result<(), Error> {
+    async fn send_check_ins(
+        &self,
+        matter: &Matter<'_>,
+        ctx: impl HandlerContext,
+    ) -> Result<(), Error> {
         let stats = ctx.im_stats();
 
         let mut targets: Vec<(NonZeroU8, u64), MAX_REGISTERED_CLIENTS> = Vec::new();
@@ -662,8 +666,6 @@ impl CheckIns for LitIcd {
                 return Ok(());
             }
         }
-
-        let matter = ctx.matter();
 
         // Right after boot, the network may still be coming up: wait for it
         // rather than spend the Check-In timeouts on it.
@@ -715,6 +717,7 @@ impl CheckIns for LitIcd {
 /// one on top with [`CLUSTER_DSLS`](Self::CLUSTER_DSLS).
 pub struct LitIcdMgmtHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     lit: &'a LitIcd,
 }
 
@@ -747,8 +750,12 @@ impl<'a> LitIcdMgmtHandler<'a> {
     }
 
     /// Create a handler backed by the shared [`LitIcd`] state.
-    pub const fn new(dataver: Dataver, lit: &'a LitIcd) -> Self {
-        Self { dataver, lit }
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>, lit: &'a LitIcd) -> Self {
+        Self {
+            dataver,
+            matter,
+            lit,
+        }
     }
 
     /// Adapt this handler to the generic `rs-matter` `Handler` trait.
@@ -758,15 +765,15 @@ impl<'a> LitIcdMgmtHandler<'a> {
 
     /// The accessing fabric of the current command.
     fn cmd_fabric(ctx: &impl InvokeContext) -> Result<NonZeroU8, Error> {
-        ctx.accessor()?.fab_idx()
+        NonZeroU8::new(ctx.cmd().fab_idx).ok_or(ErrorCode::UnsupportedAccess.into())
     }
 
     /// Whether the caller holds Administer privilege on this command's path.
     ///
     /// Administrators may register/unregister any client; everyone else must
     /// prove ownership of an existing entry with its verification key.
-    fn caller_is_admin(ctx: &impl InvokeContext) -> Result<bool, Error> {
-        let accessor = ctx.accessor()?;
+    fn caller_is_admin(&self, ctx: &impl InvokeContext) -> Result<bool, Error> {
+        let accessor = Accessor::for_operation(ctx, self.matter)?;
         let cmd = ctx.cmd();
         let path = GenericPath::new(
             Some(cmd.endpoint_id),
@@ -782,8 +789,8 @@ impl<'a> LitIcdMgmtHandler<'a> {
 
     /// Publish the current operating mode (and the slow poll it implies) to
     /// the mDNS layer.
-    fn sync_icd_mode(&self, ctx: &impl HandlerContext) {
-        self.lit.icd.publish_advertisement(ctx.matter(), true);
+    fn sync_icd_mode(&self) {
+        self.lit.icd.publish_advertisement(self.matter, true);
     }
 
     /// The `RegisterClient` command, minus the logging of its outcome.
@@ -803,7 +810,7 @@ impl<'a> LitIcdMgmtHandler<'a> {
 
         // A non-administrator replacing an existing entry must present its
         // verification key. A new entry (NotFound) needs no key.
-        if !Self::caller_is_admin(ctx)? {
+        if !self.caller_is_admin(ctx)? {
             let presented = request.verification_key()?.map(|k| k.0);
             if self.lit.verify_key(fab_idx, node_id, presented) == KeyVerdict::Mismatch {
                 warn!(
@@ -857,7 +864,7 @@ impl<'a> LitIcdMgmtHandler<'a> {
 
         // A non-administrator must prove ownership with the verification key
         // before the entry is removed; a missing entry is `NotFound` regardless.
-        if !Self::caller_is_admin(ctx)? {
+        if !self.caller_is_admin(ctx)? {
             let presented = request.verification_key()?.map(|k| k.0);
             match self.lit.verify_key(fab_idx, node_id, presented) {
                 KeyVerdict::NotFound => Err(ErrorCode::NotFound)?,
@@ -911,7 +918,7 @@ impl ClusterHandler for LitIcdMgmtHandler<'_> {
                 // Advertise the operating mode from the reloaded registration
                 // set right away, so a client registered before the reboot
                 // keeps the device advertising as LIT.
-                self.sync_icd_mode(&ctx);
+                self.sync_icd_mode();
 
                 Ok(())
             }
@@ -920,7 +927,7 @@ impl ClusterHandler for LitIcdMgmtHandler<'_> {
                     .access(|store, buf| self.lit.reset_persist(ctx.crypto(), store, buf))?;
 
                 // Every registration is gone, so the device drops back to SIT.
-                self.sync_icd_mode(&ctx);
+                self.sync_icd_mode();
 
                 Ok(())
             }
@@ -938,7 +945,7 @@ impl ClusterHandler for LitIcdMgmtHandler<'_> {
     }
 
     async fn run(&self, ctx: impl HandlerContext) -> Result<(), Error> {
-        let mut power_mode = pin!(self.lit.icd.run(&ctx, self.lit));
+        let mut power_mode = pin!(self.lit.icd.run(self.matter, &ctx, self.lit));
 
         // Every operating mode change - a registration, the last one gone, the
         // application requiring SIT operation - is a global (not fabric-scoped)
@@ -948,7 +955,7 @@ impl ClusterHandler for LitIcdMgmtHandler<'_> {
             loop {
                 self.lit.mode_changed.wait().await;
 
-                self.sync_icd_mode(&ctx);
+                self.sync_icd_mode();
                 ctx.notify_attr_changed(
                     ROOT_ENDPOINT_ID,
                     Self::CLUSTER.id,

@@ -22,11 +22,11 @@ use core::mem::MaybeUninit;
 use core::num::NonZeroU8;
 
 use crate::acl::AclEntry;
+use crate::attest::DeviceAttestation;
 use crate::cert::CertRef;
 use crate::crypto::{CanonPkcSignature, Crypto, SigningSecretKey, PKC_CANON_PUBLIC_KEY_LEN};
 use crate::dm::clusters::acl::{emit_acl_entry_changed, ChangeTypeEnum};
 use crate::dm::clusters::adm_comm;
-use crate::dm::clusters::dev_att::DeviceAttestation;
 use crate::dm::clusters::gen_comm::GenCommHandler;
 use crate::dm::endpoints::ROOT_ENDPOINT_ID;
 use crate::dm::{ArrayAttributeRead, Cluster, Dataver, InvokeContext, ReadContext};
@@ -36,9 +36,11 @@ use crate::tlv::{
     Nullable, Octets, OctetsArrayBuilder, OctetsBuilder, TLVBuilder, TLVBuilderParent, TLVElement,
     TLVTag, TLVWrite,
 };
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::{AttChallengeRef, SessionMode, ATT_CHALLENGE_LEN};
 use crate::utils::init::InitMaybeUninit;
 use crate::utils::storage::WriteBuf;
+use crate::Matter;
 
 pub use crate::dm::clusters::decl::operational_credentials::*;
 
@@ -70,14 +72,16 @@ impl NodeOperationalCertStatusEnum {
 /// The system implementation of a handler for the Node Operational Credentials Matter cluster.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct NocHandler {
+pub struct NocHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
 }
 
-impl NocHandler {
-    /// Creates a new instance of the `NocHandler` with the given `Dataver`.
-    pub const fn new(dataver: Dataver) -> Self {
-        Self { dataver }
+impl<'a> NocHandler<'a> {
+    /// Creates a new instance of the `NocHandler` with the given `Dataver`,
+    /// managing the operational credentials of `matter`.
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>) -> Self {
+        Self { dataver, matter }
     }
 
     /// Adapt the handler instance to the generic `rs-matter` `Handler` trait
@@ -102,7 +106,7 @@ impl NocHandler {
     }
 }
 
-impl ClusterHandler for NocHandler {
+impl ClusterHandler for NocHandler<'_> {
     const CLUSTER: Cluster<'static> = FULL_CLUSTER;
 
     fn dataver(&self) -> u32 {
@@ -134,7 +138,7 @@ impl ClusterHandler for NocHandler {
 
         let attr = ctx.attr();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let mut fabrics = state.fabrics.iter().filter(|fabric| {
                 (!attr.fab_filter || attr.fab_idx == fabric.fab_idx().get())
                     && !fabric.root_ca().is_empty()
@@ -200,7 +204,7 @@ impl ClusterHandler for NocHandler {
 
         let attr = ctx.attr();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let mut fabrics = state.fabrics.iter().filter(|fabric| {
                 (!attr.fab_filter || attr.fab_idx == fabric.fab_idx().get())
                     && !fabric.root_ca().is_empty()
@@ -233,8 +237,8 @@ impl ClusterHandler for NocHandler {
     }
 
     fn commissioned_fabrics(&self, ctx: impl ReadContext) -> Result<u8, Error> {
-        ctx.exchange()
-            .with_state(|state| Ok(state.fabrics.iter().count() as u8))
+        ctx.exchange_id()
+            .with_state(self.matter, |state| Ok(state.fabrics.iter().count() as u8))
     }
 
     fn trusted_root_certificates<P: TLVBuilderParent>(
@@ -242,7 +246,7 @@ impl ClusterHandler for NocHandler {
         ctx: impl ReadContext,
         builder: ArrayAttributeRead<OctetsArrayBuilder<P>, OctetsBuilder<P>>,
     ) -> Result<P, Error> {
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             // `TrustedRootCertificates` is a plain `list[octet_string]`, not a
             // fabric-scoped struct list, so fabric filtering does not apply
             // here — every committed fabric's root cert is reported.
@@ -302,8 +306,8 @@ impl ClusterHandler for NocHandler {
             return Err(ErrorCode::InvalidCommand.into());
         }
 
-        ctx.exchange().with_state(|state| {
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+        ctx.exchange_id().with_state(self.matter, |state| {
+            let sess = ctx.exchange_id().session(&mut state.sessions);
 
             // Switch to raw writer for the response
             // Necessary, as we want to take advantage of the `TLVWrite::str_cb` method
@@ -327,7 +331,7 @@ impl ClusterHandler for NocHandler {
             let signature = signature.init_with(CanonPkcSignature::init()); // TODO MEDIUM BUFFER
 
             writer.str_cb(&TLVTag::Context(0), |buf| {
-                let dev_att = ctx.exchange().matter().dev_att();
+                let dev_att = self.matter.dev_att();
 
                 let mut wb = WriteBuf::new(buf);
                 wb.start_struct(&TLVTag::Anonymous)?;
@@ -359,7 +363,7 @@ impl ClusterHandler for NocHandler {
 
     fn handle_certificate_chain_request<P: TLVBuilderParent>(
         &self,
-        ctx: impl InvokeContext,
+        _ctx: impl InvokeContext,
         request: CertificateChainRequestRequest<'_>,
         response: CertificateChainResponseBuilder<P>,
     ) -> Result<P, Error> {
@@ -374,7 +378,7 @@ impl ClusterHandler for NocHandler {
         // Struct is already started
         // writer.start_struct(&CmdDataWriter::TAG)?;
 
-        let dev_att = ctx.exchange().matter().dev_att();
+        let dev_att = self.matter.dev_att();
 
         writer.str(
             &TLVTag::Context(0),
@@ -408,8 +412,8 @@ impl ClusterHandler for NocHandler {
 
         let is_for_update_noc = request.is_for_update_noc()?.unwrap_or(false);
 
-        GenCommHandler::with_armed_failsafe(&ctx, |state, _| {
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+        GenCommHandler::with_armed_failsafe(self.matter, &ctx, |state, _| {
+            let sess = ctx.exchange_id().session(&mut state.sessions);
 
             // Per Matter Core spec (`CSRRequest`),
             // `isForUpdateNOC=true` is only valid over CASE — UpdateNOC
@@ -459,7 +463,7 @@ impl ClusterHandler for NocHandler {
 
                 Self::compute_attestation_signature(
                     ctx.crypto(),
-                    ctx.exchange().matter().dev_att(),
+                    self.matter.dev_att(),
                     &mut wb,
                     sess.get_att_challenge().ok_or(ErrorCode::InvalidState)?,
                     signature,
@@ -502,9 +506,10 @@ impl ClusterHandler for NocHandler {
         let buf = response.writer().available_space();
 
         let status = NodeOperationalCertStatusEnum::map(GenCommHandler::with_armed_failsafe(
+            self.matter,
             &ctx,
             |state, mut notify_mdns| {
-                let sess = ctx.exchange().id().session(&mut state.sessions);
+                let sess = ctx.exchange_id().session(&mut state.sessions);
 
                 let fabric = state.failsafe.add_noc(
                     ctx.crypto(),
@@ -604,9 +609,10 @@ impl ClusterHandler for NocHandler {
         let buf = response.writer().available_space();
 
         let status = NodeOperationalCertStatusEnum::map(GenCommHandler::with_armed_failsafe(
+            self.matter,
             &ctx,
             |state, notify_mdns| {
-                let sess = ctx.exchange().id().session(&mut state.sessions);
+                let sess = ctx.exchange_id().session(&mut state.sessions);
 
                 state.failsafe.update_noc(
                     ctx.crypto(),
@@ -643,36 +649,39 @@ impl ClusterHandler for NocHandler {
 
         let mut updated_fab_idx = None;
 
-        let status = NodeOperationalCertStatusEnum::map(ctx.exchange().with_state(|state| {
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+        let status = NodeOperationalCertStatusEnum::map(ctx.exchange_id().with_state(
+            self.matter,
+            |state| {
+                let sess = ctx.exchange_id().session(&mut state.sessions);
 
-            // `UpdateFabricLabel` is fabric-scoped and the IM access-control
-            // check (see `cluster::check_cmd_access`) already rejects calls
-            // from a session with no associated fabric (PASE pre-AddNOC) with
-            // `UnsupportedAccess`. Anything that gets here therefore has an
-            // accessing fabric — and per the spec / CHIP reference impl,
-            // that includes a PASE session whose fab_idx was upgraded by
-            // `AddNOC` (`session.upgrade_fabric_idx`). So allow Case *and*
-            // Pase as long as fab_idx > 0; the `accessing_fab_idx()` helper
-            // returns 0 only for plain-text / un-upgraded PASE.
-            let fab_idx = NonZeroU8::new(sess.get_local_fabric_idx())
-                .ok_or(ErrorCode::GennCommInvalidAuthentication)?;
+                // `UpdateFabricLabel` is fabric-scoped and the IM access-control
+                // check (see `cluster::check_cmd_access`) already rejects calls
+                // from a session with no associated fabric (PASE pre-AddNOC) with
+                // `UnsupportedAccess`. Anything that gets here therefore has an
+                // accessing fabric — and per the spec / CHIP reference impl,
+                // that includes a PASE session whose fab_idx was upgraded by
+                // `AddNOC` (`session.upgrade_fabric_idx`). So allow Case *and*
+                // Pase as long as fab_idx > 0; the `accessing_fab_idx()` helper
+                // returns 0 only for plain-text / un-upgraded PASE.
+                let fab_idx = NonZeroU8::new(sess.get_local_fabric_idx())
+                    .ok_or(ErrorCode::GennCommInvalidAuthentication)?;
 
-            let fabric = state
-                .fabrics
-                .update_label(fab_idx, request.label()?)
-                .map_err(|e| {
-                    if e.code() == ErrorCode::Invalid {
-                        ErrorCode::NocLabelConflict.into()
-                    } else {
-                        e
-                    }
-                })?;
+                let fabric = state
+                    .fabrics
+                    .update_label(fab_idx, request.label()?)
+                    .map_err(|e| {
+                        if e.code() == ErrorCode::Invalid {
+                            ErrorCode::NocLabelConflict.into()
+                        } else {
+                            e
+                        }
+                    })?;
 
-            updated_fab_idx = Some(fabric.fab_idx().get());
+                updated_fab_idx = Some(fabric.fab_idx().get());
 
-            Ok(())
-        }))?;
+                Ok(())
+            },
+        ))?;
 
         // UpdateFabricLabel mutates the Fabrics list
         ctx.notify_own_cluster_changed();
@@ -694,101 +703,94 @@ impl ClusterHandler for NocHandler {
 
         let fab_idx = NonZeroU8::new(request.fabric_index()?).ok_or(ErrorCode::ConstraintError)?;
 
-        let notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let notify_mdns = || self.matter.transport().notify_comm_window_changed();
 
         // The removal is reported as failed if the fabric stays in storage
         let mut persist = FabricPersist::strict(ctx.kv());
 
-        let (status, opener_fabric_removed, persisted) = ctx.exchange().with_state(|state| {
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+        let (status, opener_fabric_removed, persisted) =
+            ctx.exchange_id().with_state(self.matter, |state| {
+                let sess = ctx.exchange_id().session(&mut state.sessions);
 
-            if state.fabrics.remove(fab_idx).is_ok() {
-                // If our own session is running on the fabric being removed,
-                // we need to expire it rather than immediately remove it, so that
-                // the response can be sent back properly
-                let expire_sess_id =
-                    (sess.get_local_fabric_idx() == fab_idx.get()).then_some(sess.id());
+                if state.fabrics.remove(fab_idx).is_ok() {
+                    // If our own session is running on the fabric being removed,
+                    // we need to expire it rather than immediately remove it, so that
+                    // the response can be sent back properly
+                    let expire_sess_id =
+                        (sess.get_local_fabric_idx() == fab_idx.get()).then_some(sess.id());
 
-                // Remove all sessions related to the fabric being removed
-                // If `expire_sess_id` is Some, the session will be expired instead of removed.
-                state.sessions.remove_for_fabric(fab_idx, expire_sess_id);
+                    // Remove all sessions related to the fabric being removed
+                    // If `expire_sess_id` is Some, the session will be expired instead of removed.
+                    state.sessions.remove_for_fabric(fab_idx, expire_sess_id);
 
-                // Drop any CASE session resumption records that were
-                // scoped to this fabric so a subsequent CASE handshake
-                // to any peer that used to belong to it starts fresh.
-                #[cfg(feature = "case-resumption")]
-                state.resumption.remove_for_fabric(fab_idx);
+                    // Drop any CASE session resumption records that were
+                    // scoped to this fabric so a subsequent CASE handshake
+                    // to any peer that used to belong to it starts fresh.
+                    #[cfg(feature = "case-resumption")]
+                    state.resumption.remove_for_fabric(fab_idx);
 
-                // Notify that a session was removed
-                ctx.exchange().matter().transport().notify_session_removed();
+                    // Notify that a session was removed
+                    self.matter.transport().notify_session_removed();
 
-                // The resumption cache was just mutated — wake the
-                // background persist task so the on-disk copy sheds
-                // the removed fabric's records too.
-                #[cfg(feature = "case-resumption")]
-                ctx.exchange()
-                    .matter()
-                    .transport()
-                    .notify_resumption_dirty();
+                    // The resumption cache was just mutated — wake the
+                    // background persist task so the on-disk copy sheds
+                    // the removed fabric's records too.
+                    #[cfg(feature = "case-resumption")]
+                    self.matter.transport().notify_resumption_dirty();
 
-                // Notify that our mDNS records might have changed
-                notify_mdns();
+                    // Notify that our mDNS records might have changed
+                    notify_mdns();
 
-                // Note that since we might have removed our own session, the exchange
-                // will terminate with a "NoSession" error, but that's OK and handled properly
+                    // Note that since we might have removed our own session, the exchange
+                    // will terminate with a "NoSession" error, but that's OK and handled properly
 
-                // The fabric is gone from memory already, so a failure to remove
-                // it from storage too is reported only once the removal is complete.
-                // The next fabric index is saved too, so that the removed one is not reused
-                let mut persisted = persist
-                    .store_next_fab_idx(state.fabrics.next_fab_idx())
-                    .and(persist.remove(fab_idx));
+                    // The fabric is gone from memory already, so a failure to remove
+                    // it from storage too is reported only once the removal is complete.
+                    // The next fabric index is saved too, so that the removed one is not reused
+                    let mut persisted = persist
+                        .store_next_fab_idx(state.fabrics.next_fab_idx())
+                        .and(persist.remove(fab_idx));
 
-                // Matter Core spec: if the removed fabric is the
-                // one that installed the TrustedTimeSource, the device SHALL
-                // clear the attribute (and emit `MissingTrustedTimeSource`).
-                if state.rtc.trusted_time_source().map(|tts| tts.fab_idx) == Some(fab_idx) {
-                    persisted = persisted.and(state.rtc.set_trusted_time_source_persist(
-                        None,
-                        persist.persist_mut(),
-                        &ctx,
-                        &ctx,
-                    ));
+                    // Matter Core spec: if the removed fabric is the
+                    // one that installed the TrustedTimeSource, the device SHALL
+                    // clear the attribute (and emit `MissingTrustedTimeSource`).
+                    if state.rtc.trusted_time_source().map(|tts| tts.fab_idx) == Some(fab_idx) {
+                        persisted = persisted.and(state.rtc.set_trusted_time_source_persist(
+                            None,
+                            persist.persist_mut(),
+                            &ctx,
+                            &ctx,
+                        ));
 
-                    ctx.exchange().matter().notify_trusted_time_source_changed();
+                        self.matter.notify_trusted_time_source_changed();
+                    }
+
+                    info!("Removed operational fabric with local index {}", fab_idx);
+
+                    // If the removed fabric was the one that opened the current
+                    // commissioning window, `AdminFabricIndex` (and `AdminVendorId`)
+                    // transition to null and subscribers must be notified — see
+                    // Matter Core spec.
+                    let opener_fabric_removed = state
+                        .pase
+                        .comm_window()
+                        .and_then(|w| w.opener())
+                        .map(|opener| opener.fab_idx == fab_idx)
+                        .unwrap_or(false);
+
+                    Ok::<_, Error>((
+                        NodeOperationalCertStatusEnum::OK,
+                        opener_fabric_removed,
+                        persisted,
+                    ))
+                } else {
+                    Ok((
+                        NodeOperationalCertStatusEnum::InvalidFabricIndex,
+                        false,
+                        Ok(()),
+                    ))
                 }
-
-                info!("Removed operational fabric with local index {}", fab_idx);
-
-                // If the removed fabric was the one that opened the current
-                // commissioning window, `AdminFabricIndex` (and `AdminVendorId`)
-                // transition to null and subscribers must be notified — see
-                // Matter Core spec.
-                let opener_fabric_removed = state
-                    .pase
-                    .comm_window()
-                    .and_then(|w| w.opener())
-                    .map(|opener| opener.fab_idx == fab_idx)
-                    .unwrap_or(false);
-
-                Ok::<_, Error>((
-                    NodeOperationalCertStatusEnum::OK,
-                    opener_fabric_removed,
-                    persisted,
-                ))
-            } else {
-                Ok((
-                    NodeOperationalCertStatusEnum::InvalidFabricIndex,
-                    false,
-                    Ok(()),
-                ))
-            }
-        })?;
+            })?;
 
         persist.run()?;
 
@@ -851,8 +853,8 @@ impl ClusterHandler for NocHandler {
         // that are not expected to return command responses other than status result.
         let mut buf = [0u8; crate::cert::MAX_CERT_ASN1_LEN];
 
-        GenCommHandler::with_armed_failsafe(&ctx, |state, _| {
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+        GenCommHandler::with_armed_failsafe(self.matter, &ctx, |state, _| {
+            let sess = ctx.exchange_id().session(&mut state.sessions);
 
             state.failsafe.add_trusted_root_cert(
                 ctx.crypto(),
@@ -914,7 +916,7 @@ impl ClusterHandler for NocHandler {
 
         let mut persist = FabricPersist::new(ctx.kv());
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             // A VVSC may only be present on a fabric whose chain has no
@@ -985,8 +987,8 @@ impl ClusterHandler for NocHandler {
             return Err(ErrorCode::ConstraintError.into());
         }
 
-        ctx.exchange().with_state(|state| {
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+        ctx.exchange_id().with_state(self.matter, |state| {
+            let sess = ctx.exchange_id().session(&mut state.sessions);
             let attestation_challenge = sess.get_att_challenge().ok_or(ErrorCode::InvalidState)?;
             let attestation_challenge_bytes: [u8; ATT_CHALLENGE_LEN] =
                 *attestation_challenge.access();

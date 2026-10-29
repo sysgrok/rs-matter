@@ -70,7 +70,7 @@ impl BusyInteractionModel {
             .send_with(|_, wb| {
                 StatusResp::write(wb, status)?;
 
-                Ok(Some(OpCode::StatusResponse.meta()))
+                Ok(Some(OpCode::StatusResponse.into()))
             })
             .await
     }

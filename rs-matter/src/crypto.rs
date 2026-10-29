@@ -672,11 +672,14 @@ where
     crypto
 }
 
+/// The private key of the test Device Attestation Certificate, for [`test_only_crypto`].
+pub const TEST_DAC_PRIVKEY: CanonPkcSecretKeyRef = CanonPkcSecretKeyRef::new(&[
+    0xaa, 0xb6, 0x00, 0xae, 0x8a, 0xe8, 0xaa, 0xb7, 0xd7, 0x36, 0x27, 0xc2, 0x17, 0xb7, 0xc2, 0x04,
+    0x70, 0x9c, 0xa6, 0x94, 0x6a, 0xf5, 0xf2, 0xf7, 0x53, 0x08, 0x33, 0xa5, 0x2b, 0x44, 0xfb, 0xff,
+]);
+
 pub fn test_only_crypto() -> impl Crypto {
-    default_crypto(
-        WeakTestOnlyRand::new_default(),
-        crate::dm::devices::test::DAC_PRIVKEY,
-    )
+    default_crypto(WeakTestOnlyRand::new_default(), TEST_DAC_PRIVKEY)
 }
 
 #[cfg(test)]
@@ -1292,7 +1295,7 @@ mod tests {
         let mut singleton_pub = CanonPkcPublicKey::new();
         unwrap!(unwrap!(singleton.pub_key()).write_canon(&mut singleton_pub));
 
-        let dac = unwrap!(crypto.secret_key(crate::dm::devices::test::DAC_PRIVKEY));
+        let dac = unwrap!(crypto.secret_key(super::TEST_DAC_PRIVKEY));
         let mut dac_pub = CanonPkcPublicKey::new();
         unwrap!(unwrap!(dac.pub_key()).write_canon(&mut dac_pub));
 

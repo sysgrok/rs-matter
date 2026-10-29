@@ -797,16 +797,23 @@ where
 /// The server-side handler for the OTA Software Update Requestor cluster.
 pub struct OtaRequestorHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     providers: &'a Providers,
     state: &'a OtaState,
 }
 
 impl<'a> OtaRequestorHandler<'a> {
     /// Create a handler backed by the shared [`Providers`] registry and
-    /// [`OtaState`].
-    pub const fn new(dataver: Dataver, providers: &'a Providers, state: &'a OtaState) -> Self {
+    /// [`OtaState`], updating the software of `matter`.
+    pub const fn new(
+        dataver: Dataver,
+        matter: &'a Matter<'a>,
+        providers: &'a Providers,
+        state: &'a OtaState,
+    ) -> Self {
         Self {
             dataver,
+            matter,
             providers,
             state,
         }
@@ -816,7 +823,7 @@ impl<'a> OtaRequestorHandler<'a> {
     /// version than at its last boot - however it got it - and note the one
     /// it runs.
     fn note_running_version(&self, ctx: &impl HandlerContext) -> Result<(), Error> {
-        let dev = ctx.matter().dev_det();
+        let dev = self.matter.dev_det();
 
         // An unreadable version counts as none: there is no telling an update happened
         let last = Persist::new(ctx.kv()).load_tlv::<u32>(RUNNING_VERSION_KEY)?;

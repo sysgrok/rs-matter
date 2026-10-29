@@ -35,24 +35,23 @@
 use core::num::NonZeroU8;
 
 use crate::acl::AccessReq;
+use crate::acl::Accessor;
 use crate::dm::clusters::acl::notify_auxiliary_access_updated;
 use crate::dm::{
     Access, ArrayAttributeRead, Cluster, Dataver, EndptId, HandlerContext, InvokeContext,
     LifecycleOp, Metadata, ReadContext,
 };
 use crate::error::{Error, ErrorCode};
-use crate::fabric::{Fabric, FabricPersist, Fabrics, MAX_GROUPS_PER_FABRIC};
+use crate::fabric::{Fabric, FabricPersist, Fabrics, MulticastAddrPolicy, MAX_GROUPS_PER_FABRIC};
 use crate::group_keys::{GroupEpochKeyEntry, GroupKeySet};
+use crate::groupcast::{TestResult, TestingMode, TestingOperation};
 use crate::im::{FabricIndex, GenericPath};
 use crate::tlv::TLVBuilderParent;
-use crate::utils::cell::RefCell;
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::utils::futures::select;
-use crate::utils::init::{init, Init};
 use crate::utils::storage::Vec;
-use crate::utils::sync::blocking::Mutex;
-use crate::utils::sync::Notification;
 use crate::utils::timers::{Duration, Instant, Timer};
-use crate::with;
+use crate::{with, Matter};
 
 pub use crate::dm::clusters::decl::groupcast::*;
 
@@ -87,11 +86,6 @@ const TESTING_SECS_MIN: u16 = 10;
 const TESTING_SECS_MAX: u16 = 1200;
 const TESTING_SECS_FALLBACK: u16 = 60;
 
-/// Max buffered testing observations; when full, new observations are
-/// dropped (the CHIP test harness tolerates missing duplicates - it re-sends
-/// and de-duplicates).
-const MAX_PENDING_OBSERVATIONS: usize = 4;
-
 /// Return the `Groupcast` cluster metadata for the given feature combination.
 ///
 /// A node hosting the Groupcast cluster must also make its Access Control
@@ -111,187 +105,26 @@ pub const fn cluster(features: Feature) -> Cluster<'static> {
         .with_features(features.bits())
 }
 
-/// The state of an ongoing `GroupcastTesting` test session.
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct TestingMode {
-    /// The fabric that armed the testing mode (`FabricUnderTest`).
-    pub(crate) fab_idx: NonZeroU8,
-    /// The test operation being executed.
-    pub(crate) operation: GroupcastTestingEnum,
-    /// When the testing mode auto-expires.
-    pub(crate) deadline: Instant,
-}
-
-/// A `GroupcastTesting` diagnostic observation, recorded at the place where
-/// it happens (the transport's group-message RX path, the Interaction
-/// Model's group-invoke processing) and turned into a `GroupcastTesting`
-/// *event* by [`GroupcastHandler::run`] - the recording sites have no access
-/// to the Interaction Model's event machinery.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct TestingObservation {
-    pub(crate) src_ip: Option<[u8; 16]>,
-    pub(crate) dst_ip: Option<[u8; 16]>,
-    pub(crate) group_id: Option<u16>,
-    pub(crate) endpoint_id: Option<EndptId>,
-    pub(crate) cluster_id: Option<u32>,
-    pub(crate) element_id: Option<u32>,
-    pub(crate) access_allowed: Option<bool>,
-    pub(crate) result: GroupcastTestResultEnum,
-}
-
-impl TestingObservation {
-    /// The IPv6 octets of the multicast address the given group uses, for the
-    /// `GroupcastTesting` event's `DestinationIpAddress` field.
-    ///
-    /// The transport does not surface the actual UDP destination address of a
-    /// received datagram, so it is reconstructed from the group's multicast
-    /// address policy; for an unknown group (e.g. the no-key-available case) the
-    /// IANA-assigned address is assumed, as `IanaAddr` is the default policy.
-    pub(crate) fn group_dst_ip(fabrics: &Fabrics, fab_idx: NonZeroU8, group_id: u16) -> [u8; 16] {
-        fabrics
-            .get(fab_idx)
-            .and_then(|fabric| {
-                fabric
-                    .groups()
-                    .get(group_id)
-                    .map(|entry| match entry.effective_mcast_policy() {
-                        MulticastAddrPolicyEnum::IanaAddr => {
-                            crate::utils::ipv6::IANA_GROUPCAST_MULTICAST_ADDR.octets()
-                        }
-                        MulticastAddrPolicyEnum::PerGroup => {
-                            crate::utils::ipv6::compute_group_multicast_addr(
-                                fabric.fabric_id(),
-                                group_id,
-                            )
-                            .octets()
-                        }
-                    })
-            })
-            .unwrap_or(crate::utils::ipv6::IANA_GROUPCAST_MULTICAST_ADDR.octets())
-    }
-
-    /// The IPv6 octets of a transport [`Address`], for the `GroupcastTesting`
-    /// event's `SourceIpAddress` field (IPv4 addresses are V4-mapped).
-    pub(crate) fn addr_ip(addr: &crate::transport::network::Address) -> Option<[u8; 16]> {
-        let crate::transport::network::Address::Udp(addr) = addr else {
-            return None;
-        };
-
-        Some(match addr.ip() {
-            core::net::IpAddr::V6(ip) => ip.octets(),
-            core::net::IpAddr::V4(ip) => ip.to_ipv6_mapped().octets(),
-        })
-    }
-}
-
-struct TestingBridgeState {
-    mode: Option<TestingMode>,
-    pending: Vec<TestingObservation, MAX_PENDING_OBSERVATIONS>,
-}
-
-impl TestingBridgeState {
-    const fn new() -> Self {
-        Self {
-            mode: None,
-            pending: Vec::new(),
-        }
-    }
-
-    fn init() -> impl Init<Self> {
-        init!(Self {
-            mode: None,
-            pending <- Vec::init(),
-        })
-    }
-}
-
-/// The bridge between the places that *observe* Groupcast test conditions
-/// (the transport RX path, the Interaction Model's invoke processing, the
-/// `GroupcastTesting` command) and the [`GroupcastHandler`], which owns the
-/// `FabricUnderTest` reporting and the `GroupcastTesting` event emission.
-///
-/// Lives on [`crate::Matter`] so that all three parties can reach it.
-pub(crate) struct TestingBridge {
-    state: Mutex<RefCell<TestingBridgeState>>,
-    changed: Notification,
-}
-
-impl TestingBridge {
-    /// Create a new bridge, with testing disabled.
-    pub(crate) const fn new() -> Self {
-        Self {
-            state: Mutex::new(RefCell::new(TestingBridgeState::new())),
-            changed: Notification::new(),
-        }
-    }
-
-    pub(crate) fn init() -> impl Init<Self> {
-        init!(Self {
-            state <- Mutex::init(RefCell::init(TestingBridgeState::init())),
-            changed <- Notification::init(),
-        })
-    }
-
-    /// Set (or clear) the testing mode; wakes [`GroupcastHandler::run`].
-    pub(crate) fn set_mode(&self, mode: Option<TestingMode>) {
-        self.state.lock(|state| state.borrow_mut().mode = mode);
-        self.changed.notify();
-    }
-
-    /// The current testing mode, if any (including one that has expired but
-    /// has not been swept by [`GroupcastHandler::run`] yet - callers that
-    /// care use [`Self::armed`]).
-    pub(crate) fn mode(&self) -> Option<TestingMode> {
-        self.state.lock(|state| state.borrow().mode)
-    }
-
-    /// The current *unexpired* testing mode arming the given operation, if
-    /// any.
-    pub(crate) fn armed(&self, operation: GroupcastTestingEnum) -> Option<TestingMode> {
-        self.mode()
-            .filter(|mode| mode.operation == operation && Instant::now() < mode.deadline)
-    }
-
-    /// Record a testing observation (dropped when the buffer is full);
-    /// wakes [`GroupcastHandler::run`] to turn it into an event.
-    pub(crate) fn observe(&self, observation: TestingObservation) {
-        self.state.lock(|state| {
-            let _ = state.borrow_mut().pending.push(observation);
-        });
-        self.changed.notify();
-    }
-
-    /// Take the oldest pending observation, if any.
-    fn pop(&self) -> Option<TestingObservation> {
-        self.state.lock(|state| {
-            let pending = &mut state.borrow_mut().pending;
-            (!pending.is_empty()).then(|| pending.remove(0))
-        })
-    }
-
-    /// Wait for a mode change or a new observation.
-    async fn wait_changed(&self) {
-        self.changed.wait().await
-    }
-}
-
 /// The system implementation of a handler for the Groupcast Matter cluster.
-pub struct GroupcastHandler {
+pub struct GroupcastHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     features: Feature,
 }
 
-impl GroupcastHandler {
+impl<'a> GroupcastHandler<'a> {
     /// Create a new instance of `GroupcastHandler` with the given `Dataver`
     /// and feature combination.
     ///
     /// `features` must match the features advertised by the cluster metadata
     /// this handler is composed with (see [`cluster`]) - it drives the
     /// feature-conditional command validation.
-    pub const fn new(dataver: Dataver, features: Feature) -> Self {
-        Self { dataver, features }
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>, features: Feature) -> Self {
+        Self {
+            dataver,
+            matter,
+            features,
+        }
     }
 
     /// Adapt the handler instance to the generic `rs-matter` `Handler` trait
@@ -322,8 +155,8 @@ impl GroupcastHandler {
         for fabric in fabrics.iter() {
             for entry in fabric.groups().iter() {
                 match entry.effective_mcast_policy() {
-                    MulticastAddrPolicyEnum::IanaAddr => iana = true,
-                    MulticastAddrPolicyEnum::PerGroup => count += 1,
+                    MulticastAddrPolicy::IanaAddr => iana = true,
+                    MulticastAddrPolicy::PerGroup => count += 1,
                 }
             }
         }
@@ -339,7 +172,7 @@ impl GroupcastHandler {
         fabrics: &Fabrics,
         fab_idx: NonZeroU8,
         group_id: u16,
-        policy: MulticastAddrPolicyEnum,
+        policy: MulticastAddrPolicy,
     ) -> u16 {
         let mut iana = false;
         let mut count = 0;
@@ -352,15 +185,15 @@ impl GroupcastHandler {
                 }
 
                 match entry.effective_mcast_policy() {
-                    MulticastAddrPolicyEnum::IanaAddr => iana = true,
-                    MulticastAddrPolicyEnum::PerGroup => count += 1,
+                    MulticastAddrPolicy::IanaAddr => iana = true,
+                    MulticastAddrPolicy::PerGroup => count += 1,
                 }
             }
         }
 
         match policy {
-            MulticastAddrPolicyEnum::IanaAddr => iana = true,
-            MulticastAddrPolicyEnum::PerGroup => count += 1,
+            MulticastAddrPolicy::IanaAddr => iana = true,
+            MulticastAddrPolicy::PerGroup => count += 1,
         }
 
         count + iana as u16
@@ -378,7 +211,7 @@ impl GroupcastHandler {
     /// privilege on this cluster (required for the `UseAuxiliaryACL` field
     /// of `JoinGroup`, which is otherwise a `Manage`-privilege command).
     fn accessor_is_admin(&self, ctx: &impl InvokeContext) -> Result<bool, Error> {
-        let accessor = ctx.accessor()?;
+        let accessor = Accessor::for_operation(ctx, self.matter)?;
         let cmd = ctx.cmd();
 
         let path = GenericPath::new(
@@ -395,12 +228,11 @@ impl GroupcastHandler {
 
     /// The node ID of the invoking peer (for the `AuxiliaryAccessUpdated`
     /// event's `AdminNodeID` field).
-    fn peer_node_id(ctx: &impl InvokeContext) -> Option<u64> {
-        ctx.exchange()
-            .with_state(|state| {
+    fn peer_node_id(&self, ctx: &impl InvokeContext) -> Option<u64> {
+        ctx.exchange_id()
+            .with_state(self.matter, |state| {
                 Ok::<_, Error>(
-                    ctx.exchange()
-                        .id()
+                    ctx.exchange_id()
                         .session(&mut state.sessions)
                         .get_peer_node_id(),
                 )
@@ -494,7 +326,7 @@ impl GroupcastHandler {
             })?
             .key_set_id(Some(key_set_id))?
             .has_auxiliary_acl(listener.then(|| entry.has_aux_acl()))?
-            .mcast_addr_policy(entry.effective_mcast_policy())?
+            .mcast_addr_policy(mcast_policy_to_cluster(entry.effective_mcast_policy()))?
             .fabric_index(Some(fabric.fab_idx().get()))?
             .end()
     }
@@ -505,7 +337,7 @@ impl GroupcastHandler {
     fn changed(&self, ctx: &impl InvokeContext, fab_idx: NonZeroU8) -> Result<(), Error> {
         let mut persist = FabricPersist::new(ctx.kv());
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             if !state.failsafe.is_armed_for(fab_idx.get()) {
                 let fabric = state.fabrics.fabric(fab_idx)?;
                 persist.store(fabric)?;
@@ -517,7 +349,7 @@ impl GroupcastHandler {
         persist.run()?;
 
         // Reconcile the joined multicast addresses with the new memberships
-        ctx.exchange().matter().transport().notify_groups_changed();
+        self.matter.transport().notify_groups_changed();
 
         self.dataver_changed();
         ctx.notify_own_endpoint_changed();
@@ -526,7 +358,7 @@ impl GroupcastHandler {
     }
 }
 
-impl ClusterHandler for GroupcastHandler {
+impl ClusterHandler for GroupcastHandler<'_> {
     const CLUSTER: Cluster<'static> = cluster(
         Feature::LISTENER
             .union(Feature::SENDER)
@@ -584,7 +416,7 @@ impl ClusterHandler for GroupcastHandler {
 
             // Per the Matter Core spec, `FabricUnderTest` is zero when the
             // server initializes - testing mode does not survive a reboot.
-            ctx.matter().groupcast_testing().set_mode(None);
+            self.matter.groupcast_testing().set_mode(None);
         }
 
         Ok(())
@@ -597,7 +429,7 @@ impl ClusterHandler for GroupcastHandler {
         //   access to the event machinery);
         // - expire the testing mode when its deadline passes, reporting the
         //   `FabricUnderTest` change to subscribers.
-        let bridge = ctx.matter().groupcast_testing();
+        let bridge = self.matter.groupcast_testing();
 
         loop {
             while let Some(observation) = bridge.pop() {
@@ -623,7 +455,7 @@ impl ClusterHandler for GroupcastHandler {
                             .cluster_id(observation.cluster_id)?
                             .element_id(observation.element_id)?
                             .access_allowed(observation.access_allowed)?
-                            .groupcast_test_result(observation.result)?
+                            .groupcast_test_result(test_result_to_cluster(observation.result))?
                             .fabric_index(Some(mode.fab_idx.get()))?
                             .end()
                     },
@@ -663,7 +495,7 @@ impl ClusterHandler for GroupcastHandler {
     ) -> Result<P, Error> {
         let listener = self.listener();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let attr = ctx.attr();
 
             let mut entries = state
@@ -701,14 +533,14 @@ impl ClusterHandler for GroupcastHandler {
     }
 
     fn used_mcast_addr_count(&self, ctx: impl ReadContext) -> Result<u16, Error> {
-        ctx.exchange()
-            .with_state(|state| Ok(Self::used_mcast_addrs(&state.fabrics)))
+        ctx.exchange_id().with_state(self.matter, |state| {
+            Ok(Self::used_mcast_addrs(&state.fabrics))
+        })
     }
 
-    fn fabric_under_test(&self, ctx: impl ReadContext) -> Result<FabricIndex, Error> {
-        Ok(ctx
-            .exchange()
-            .matter()
+    fn fabric_under_test(&self, _ctx: impl ReadContext) -> Result<FabricIndex, Error> {
+        Ok(self
+            .matter
             .groupcast_testing()
             .mode()
             // Lazily treat an expired-but-not-yet-swept testing mode as
@@ -749,7 +581,7 @@ impl ClusterHandler for GroupcastHandler {
 
         let use_auxiliary_acl = request.use_auxiliary_acl()?;
         let replace_endpoints = request.replace_endpoints()?;
-        let mcast_addr_policy = request.mcast_addr_policy()?;
+        let mcast_addr_policy = request.mcast_addr_policy()?.map(mcast_policy_from_cluster);
 
         if endpoints.is_empty() {
             // A sender-only join needs the Sender feature
@@ -771,8 +603,7 @@ impl ClusterHandler for GroupcastHandler {
             return Err(ErrorCode::ConstraintError.into());
         }
 
-        if matches!(mcast_addr_policy, Some(MulticastAddrPolicyEnum::PerGroup)) && !self.per_group()
-        {
+        if matches!(mcast_addr_policy, Some(MulticastAddrPolicy::PerGroup)) && !self.per_group() {
             return Err(ErrorCode::ConstraintError.into());
         }
 
@@ -782,10 +613,10 @@ impl ClusterHandler for GroupcastHandler {
             return Err(ErrorCode::UnsupportedAccess.into());
         }
 
-        let fab_idx = ctx.accessor()?.fab_idx()?;
-        let peer_node_id = Self::peer_node_id(&ctx);
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
+        let peer_node_id = self.peer_node_id(&ctx);
 
-        let aux_changed = ctx.exchange().with_state(|state| {
+        let aux_changed = ctx.exchange_id().with_state(self.matter, |state| {
             let is_new = state
                 .fabrics
                 .fabric(fab_idx)?
@@ -818,7 +649,7 @@ impl ClusterHandler for GroupcastHandler {
                     // Mirrors `groupcast_join`: an existing entry keeps its
                     // effective policy; a new one defaults to `IanaAddr`
                     .map(|entry| entry.effective_mcast_policy())
-                    .unwrap_or(MulticastAddrPolicyEnum::IanaAddr),
+                    .unwrap_or(MulticastAddrPolicy::IanaAddr),
             };
 
             if Self::used_mcast_addrs_with(&state.fabrics, fab_idx, group_id, target_policy)
@@ -888,15 +719,15 @@ impl ClusterHandler for GroupcastHandler {
             endpoints = Some(list);
         }
 
-        let fab_idx = ctx.accessor()?.fab_idx()?;
-        let peer_node_id = Self::peer_node_id(&ctx);
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
+        let peer_node_id = self.peer_node_id(&ctx);
         let sender = self.sender();
 
         // The endpoints that were actually removed, reported via the
         // response (empty for the leave-all form)
         let mut removed = Vec::<EndptId, MAX_CMD_ENDPOINTS>::new();
 
-        let aux_changed = ctx.exchange().with_state(|state| {
+        let aux_changed = ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             let mut aux_changed = false;
@@ -958,7 +789,7 @@ impl ClusterHandler for GroupcastHandler {
                                 // (the legacy cleanup would reap them)
                                 let entry = unwrap!(fabric.groups_mut().get_mut(group_id));
                                 if entry.mcast_policy.is_none() {
-                                    entry.mcast_policy = Some(MulticastAddrPolicyEnum::PerGroup);
+                                    entry.mcast_policy = Some(MulticastAddrPolicy::PerGroup);
                                 }
                             } else {
                                 fabric.groups_mut().groupcast_remove(group_id);
@@ -1020,9 +851,9 @@ impl ClusterHandler for GroupcastHandler {
             }
         }
 
-        let fab_idx = ctx.accessor()?.fab_idx()?;
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             if fabric.groups().get(group_id).is_none() {
@@ -1043,10 +874,10 @@ impl ClusterHandler for GroupcastHandler {
         let group_id = request.group_id()?;
         let use_auxiliary_acl = request.use_auxiliary_acl()?;
 
-        let fab_idx = ctx.accessor()?.fab_idx()?;
-        let peer_node_id = Self::peer_node_id(&ctx);
+        let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
+        let peer_node_id = self.peer_node_id(&ctx);
 
-        let aux_changed = ctx.exchange().with_state(|state| {
+        let aux_changed = ctx.exchange_id().with_state(self.matter, |state| {
             let fabric = state.fabrics.fabric_mut(fab_idx)?;
 
             if fabric.groups().get(group_id).is_none() {
@@ -1086,7 +917,7 @@ impl ClusterHandler for GroupcastHandler {
     ) -> Result<(), Error> {
         let operation = request.test_operation()?;
 
-        let bridge = ctx.exchange().matter().groupcast_testing();
+        let bridge = self.matter.groupcast_testing();
 
         match operation {
             GroupcastTestingEnum::DisableTesting => bridge.set_mode(None),
@@ -1107,10 +938,14 @@ impl ClusterHandler for GroupcastHandler {
                     return Err(ErrorCode::ConstraintError.into());
                 }
 
-                let fab_idx = ctx.accessor()?.fab_idx()?;
+                let fab_idx = Accessor::for_operation(&ctx, self.matter)?.fab_idx()?;
                 bridge.set_mode(Some(TestingMode {
                     fab_idx,
-                    operation,
+                    operation: if matches!(operation, GroupcastTestingEnum::EnableListenerTesting) {
+                        TestingOperation::Listener
+                    } else {
+                        TestingOperation::Sender
+                    },
                     deadline: Instant::now() + Duration::from_secs(duration_secs as _),
                 }));
             }
@@ -1122,5 +957,33 @@ impl ClusterHandler for GroupcastHandler {
         ctx.notify_own_endpoint_changed();
 
         Ok(())
+    }
+}
+
+/// Convert a multicast address policy of the Groupcast cluster to the node's one
+fn mcast_policy_from_cluster(policy: MulticastAddrPolicyEnum) -> MulticastAddrPolicy {
+    match policy {
+        MulticastAddrPolicyEnum::IanaAddr => MulticastAddrPolicy::IanaAddr,
+        MulticastAddrPolicyEnum::PerGroup => MulticastAddrPolicy::PerGroup,
+    }
+}
+
+/// Convert a multicast address policy of the node to the Groupcast cluster's one
+fn mcast_policy_to_cluster(policy: MulticastAddrPolicy) -> MulticastAddrPolicyEnum {
+    match policy {
+        MulticastAddrPolicy::IanaAddr => MulticastAddrPolicyEnum::IanaAddr,
+        MulticastAddrPolicy::PerGroup => MulticastAddrPolicyEnum::PerGroup,
+    }
+}
+
+/// Convert the result of a testing observation to the Groupcast cluster's one
+fn test_result_to_cluster(result: TestResult) -> GroupcastTestResultEnum {
+    match result {
+        TestResult::Success => GroupcastTestResultEnum::Success,
+        TestResult::GeneralError => GroupcastTestResultEnum::GeneralError,
+        TestResult::MessageReplay => GroupcastTestResultEnum::MessageReplay,
+        TestResult::FailedAuth => GroupcastTestResultEnum::FailedAuth,
+        TestResult::NoAvailableKey => GroupcastTestResultEnum::NoAvailableKey,
+        TestResult::SendFailure => GroupcastTestResultEnum::SendFailure,
     }
 }

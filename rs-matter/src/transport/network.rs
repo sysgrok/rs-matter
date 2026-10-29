@@ -28,9 +28,7 @@ use crate::utils::sync::MaybeSend;
 pub mod btp;
 pub mod mdns;
 pub mod tcp;
-pub mod thread;
 pub mod udp;
-pub mod wifi;
 
 // Maximum UDP RX packet size per Matter spec
 pub const MAX_RX_PACKET_SIZE: usize = 1583;

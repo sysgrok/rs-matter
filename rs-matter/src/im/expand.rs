@@ -27,6 +27,7 @@ use core::cell::Cell;
 use crate::acl::Accessor;
 use crate::dm::{AttrDetails, ClusterId, CmdDetails, EndptId, Metadata, Node, Quality};
 use crate::error::Error;
+use crate::im::access::ClusterAccess as _;
 use crate::im::encoding::{
     AttrData, AttrPath, AttrStatus, CmdData, CmdStatus, DataVersionFilter, GenericPath,
     IMStatusCode, InvReq, ReportDataReq, WriteReq,

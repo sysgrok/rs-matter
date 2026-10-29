@@ -27,13 +27,14 @@
 
 use core::cell::Cell;
 
-use rs_matter::dm::{EmptyHandler, Node, ReportContext, ReportDataHandler, SubscriptionCtx};
+use rs_matter::dm::{EmptyHandler, Node};
 use rs_matter::im::client::{ImClient, SubscribeOutcome, TxOutcome};
 use rs_matter::im::encoding::ReportDataResp;
 use rs_matter::im::{
     AttrPath, GenericPath, IMStatusCode, InteractionModel, InteractionModelState, OpCode,
     StatusResp,
 };
+use rs_matter::im::{ReportContext, ReportDataHandler, SubscriptionCtx};
 use rs_matter::persist::{DummyKvBlobStore, PERSISTENT_SUBSCRIPTIONS_START};
 use rs_matter::respond::Responder;
 use rs_matter::transport::exchange::{Exchange, MatterBuffers};
@@ -184,8 +185,8 @@ impl ReportDataHandler for CapturingReports {
         }
         self.attrs.set(attrs);
 
-        // Ambient `HandlerContext` access is available too — e.g. `ctx.matter()`.
-        let _ = ctx.matter();
+        // Ambient `HandlerContext` access is available too — e.g. `ctx.utc_time()`.
+        let _ = ctx.utc_time();
 
         self.done.notify();
 

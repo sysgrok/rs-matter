@@ -232,14 +232,14 @@ pub struct ThermostatHandler<H: ThermostatHooks> {
     setpoint_change: SetpointChangeRecord,
 }
 
-/// The node's Last-Known-Good UTC time in Matter-epoch seconds.
+/// The node's current UTC time in Matter-epoch seconds, if known.
 ///
-/// Reading it here rather than back through [`ThermostatHooks::utc_now_secs`]
-/// keeps a device with no clock of its own from holding a `&Matter` purely to
-/// answer this.
+/// Reading it from the context rather than back through
+/// [`ThermostatHooks::utc_now_secs`] keeps a device with no clock of its own
+/// from having to provide one just to answer this.
 fn node_utc_now_secs(ctx: &impl HandlerContext) -> Option<u32> {
-    ctx.matter()
-        .with_state(|state| state.rtc.utc_time().reliable_secs())
+    ctx.utc_time()
+        .reliable_secs()
         .map(|secs| secs.try_into().unwrap_or(u32::MAX))
 }
 

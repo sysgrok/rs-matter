@@ -23,8 +23,8 @@ use std::process::Command;
 
 use crate::dm::clusters::net_comm::NetCtlError;
 use crate::dm::networks::unix::{UnixNetif, UnixNetifs};
+use crate::dm::networks::wifi::wpa_supp::IpStackCtl;
 use crate::error::{Error, ErrorCode};
-use crate::transport::network::wifi::wpa_supp::IpStackCtl;
 use crate::utils::futures::{select, Either};
 use crate::utils::ipv6::create_link_local_ipv6;
 use crate::utils::sync::blocking;

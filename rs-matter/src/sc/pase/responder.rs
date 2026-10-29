@@ -34,6 +34,7 @@ use crate::sc::{
 };
 use crate::tlv::{get_root_node_struct, FromTLV, OctetStr, TLVElement, TagType, ToTLV};
 use crate::transport::exchange::Exchange;
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::{ReservedSession, SessionMode};
 use crate::utils::init::{init, Init};
 

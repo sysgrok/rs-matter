@@ -20,7 +20,7 @@
 use crate::dm::{Cluster, Dataver, HandlerContext, InvokeContext, ReadContext};
 use crate::error::{Error, ErrorCode};
 use crate::tlv::TLVBuilderParent;
-use crate::with;
+use crate::{with, Matter};
 
 use super::*;
 
@@ -37,6 +37,7 @@ use super::*;
 /// `run` hook.
 pub struct SitIcdMgmtHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     icd: &'a Icd,
 }
 
@@ -51,9 +52,13 @@ impl<'a> SitIcdMgmtHandler<'a> {
                 | AttributeId::UserActiveModeTriggerInstruction))
         .with_cmds(with!());
 
-    /// Create a handler backed by the shared [`Icd`] state.
-    pub const fn new(dataver: Dataver, icd: &'a Icd) -> Self {
-        Self { dataver, icd }
+    /// Create a handler backed by the shared [`Icd`] state, for the ICD `matter`.
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>, icd: &'a Icd) -> Self {
+        Self {
+            dataver,
+            matter,
+            icd,
+        }
     }
 
     /// Adapt this handler to the generic `rs-matter` `Handler` trait.
@@ -75,7 +80,7 @@ impl ClusterHandler for SitIcdMgmtHandler<'_> {
     }
 
     async fn run(&self, ctx: impl HandlerContext) -> Result<(), Error> {
-        self.icd.run(ctx, &()).await
+        self.icd.run(self.matter, ctx, &()).await
     }
 
     fn idle_mode_duration(&self, _ctx: impl ReadContext) -> Result<u32, Error> {

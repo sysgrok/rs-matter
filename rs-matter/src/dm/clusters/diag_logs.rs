@@ -58,13 +58,14 @@ use crate::bdx::{BdxBuffer, BdxUploadInitiator};
 use crate::dm::{Cluster, Dataver, HandlerContext, InvokeContext};
 use crate::error::{Error, ErrorCode};
 use crate::tlv::{Octets, TLVBuilderParent};
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::exchange::{Exchange, MAX_EXCHANGE_RX_BUF_SIZE};
 use crate::utils::cell::RefCell;
 use crate::utils::storage::pooled::Buffers;
 use crate::utils::storage::String;
 use crate::utils::sync::blocking::Mutex;
 use crate::utils::sync::{MaybeSend, MaybeSendSync, Notification, Signal};
-use crate::with;
+use crate::{with, Matter};
 
 pub use crate::dm::clusters::decl::diagnostic_logs::*;
 
@@ -172,8 +173,9 @@ enum Bdx {
 ///
 /// The handler's [`run`](Self::run) hook must be polled (the data model does this
 /// for the handler tree it is given) for BDX streaming to make progress.
-pub struct DiagLogsHandler<B, P> {
+pub struct DiagLogsHandler<'a, B, P> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     buffers: B,
     logs: P,
     /// The BDX transfer slot.
@@ -185,12 +187,13 @@ pub struct DiagLogsHandler<B, P> {
     handshake: Signal<Option<bool>>,
 }
 
-impl<B, P> DiagLogsHandler<B, P> {
+impl<'a, B, P> DiagLogsHandler<'a, B, P> {
     /// Create a new handler backed by the given staging-buffer pool and log
-    /// provider.
-    pub const fn new(dataver: Dataver, buffers: B, logs: P) -> Self {
+    /// provider, sending the logs of `matter`.
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>, buffers: B, logs: P) -> Self {
         Self {
             dataver,
+            matter,
             buffers,
             logs,
             bdx: Mutex::new(RefCell::new(Bdx::Idle)),
@@ -205,7 +208,7 @@ impl<B, P> DiagLogsHandler<B, P> {
     }
 }
 
-impl<B, P> DiagLogsHandler<B, P>
+impl<B, P> DiagLogsHandler<'_, B, P>
 where
     B: Buffers<BdxBuffer>,
     P: DiagLogs,
@@ -281,7 +284,7 @@ where
         unwrap!(buf.resize_default(MAX_EXCHANGE_RX_BUF_SIZE));
 
         let exchange =
-            match Exchange::initiate(ctx.matter(), ctx.crypto(), job.fab_idx, job.node_id).await {
+            match Exchange::initiate(self.matter, ctx.crypto(), job.fab_idx, job.node_id).await {
                 Ok(exchange) => exchange,
                 Err(e) => {
                     self.handshake.signal(false);
@@ -322,7 +325,7 @@ where
     }
 }
 
-impl<B, P> ClusterAsyncHandler for DiagLogsHandler<B, P>
+impl<B, P> ClusterAsyncHandler for DiagLogsHandler<'_, B, P>
 where
     B: Buffers<BdxBuffer>,
     P: DiagLogs,
@@ -387,14 +390,9 @@ where
         // The requestor is the peer of the exchange the command arrived on;
         // capture it so the background streamer can open an exchange back to it.
         let fab_idx = NonZeroU8::new(ctx.cmd().fab_idx).ok_or(ErrorCode::Invalid)?;
-        let exchange = ctx.exchange();
-        let node_id = exchange
-            .with_state(|state| {
-                Ok(exchange
-                    .id()
-                    .session(&mut state.sessions)
-                    .get_peer_node_id())
-            })?
+        let node_id = ctx
+            .exchange_id()
+            .peer_node_id(self.matter)?
             .ok_or(ErrorCode::Invalid)?;
 
         let mut fd_str = String::new();

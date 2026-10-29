@@ -62,10 +62,14 @@ use core::num::NonZeroU8;
 
 use crate::cert::gen::Validity;
 use crate::crypto::{Crypto, Rng, AEAD_CANON_KEY_LEN};
-use crate::dm::clusters::gen_comm::{CommissioningErrorEnum, GeneralCommissioningClient};
-use crate::dm::clusters::noc::{NodeOperationalCertStatusEnum, OperationalCredentialsClient};
-use crate::dm::endpoints::ROOT_ENDPOINT_ID;
+use crate::dm::clusters::decl::general_commissioning::{
+    CommissioningErrorEnum, GeneralCommissioningClient,
+};
+use crate::dm::clusters::decl::operational_credentials::{
+    NodeOperationalCertStatusEnum, OperationalCredentialsClient,
+};
 use crate::dm::NodeId;
+use crate::dm::ROOT_ENDPOINT_ID;
 use crate::error::{Error, ErrorCode};
 use crate::onboard::noc::NocGenerator;
 use crate::tlv::{FromTLV, OctetStr, TLVElement};

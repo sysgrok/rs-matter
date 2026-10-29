@@ -23,18 +23,18 @@ use core::ops::RangeInclusive;
 
 use cfg_if::cfg_if;
 
+use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
-use crate::dm::clusters::acl::{
-    AccessControlAuxiliaryTypeEnum, AccessControlEntryAuthModeEnum,
-    AccessControlEntryPrivilegeEnum, AccessControlEntryStruct, AccessControlEntryStructBuilder,
+use crate::dm::{
+    Access, AuxAclCheck, ClusterId, DeviceType, EndptId, NodeId, OperationContext, Privilege,
 };
-use crate::dm::{Access, ClusterId, DeviceType, EndptId, NodeId, Privilege};
 use crate::error::{Error, ErrorCode};
 use crate::im::GenericPath;
-use crate::tlv::{FromTLV, Nullable, TLVBuilderParent, TLVElement, TLVTag, TLVWrite, ToTLV, TLV};
+use crate::tlv::{FromTLV, Nullable, TLVElement, TLVTag, TLVWrite, ToTLV, TLV};
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::{Session, SessionMode, MAX_CAT_IDS_PER_NOC};
-use crate::utils::init::{init, Init, IntoFallibleInit};
+use crate::utils::init::{init, Init};
 use crate::utils::storage::Vec;
 use crate::Matter;
 
@@ -154,13 +154,15 @@ cfg_if! {
 #[derive(FromPrimitive, Copy, Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
+///
+/// The values are the ones of the Access Control cluster.
 pub enum AuthMode {
     /// PASE authentication
-    Pase = AccessControlEntryAuthModeEnum::PASE as _,
+    Pase = 1,
     /// CASE authentication
-    Case = AccessControlEntryAuthModeEnum::CASE as _,
+    Case = 2,
     /// Group authentication
-    Group = AccessControlEntryAuthModeEnum::Group as _,
+    Group = 3,
 }
 
 impl FromTLV<'_> for AuthMode {
@@ -168,37 +170,50 @@ impl FromTLV<'_> for AuthMode {
     where
         Self: Sized,
     {
-        Ok(AccessControlEntryAuthModeEnum::from_tlv(t)?.into())
+        Self::from_u8(t.u8()?).ok_or(ErrorCode::Invalid.into())
     }
 }
 
 impl ToTLV for AuthMode {
     fn to_tlv<W: TLVWrite>(&self, tag: &TLVTag, mut tw: W) -> Result<(), Error> {
-        AccessControlEntryAuthModeEnum::from(*self).to_tlv(tag, &mut tw)
+        tw.u8(tag, *self as _)
     }
 
     fn tlv_iter(&self, tag: TLVTag) -> impl Iterator<Item = Result<TLV<'_>, Error>> {
-        TLV::u8(tag, AccessControlEntryAuthModeEnum::from(*self) as _).into_tlv_iter()
+        TLV::u8(tag, *self as _).into_tlv_iter()
     }
 }
 
-impl From<AuthMode> for AccessControlEntryAuthModeEnum {
-    fn from(value: AuthMode) -> Self {
-        match value {
-            AuthMode::Pase => AccessControlEntryAuthModeEnum::PASE,
-            AuthMode::Case => AccessControlEntryAuthModeEnum::CASE,
-            AuthMode::Group => AccessControlEntryAuthModeEnum::Group,
-        }
+/// The type of an auxiliary ACL entry: one that the node synthesizes rather
+/// than an administrator writes.
+///
+/// The values are the ones of the Access Control cluster.
+#[derive(FromPrimitive, Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum AuxiliaryType {
+    /// Synthesized by the system
+    System = 0,
+    /// Synthesized for the Groupcast cluster
+    Groupcast = 1,
+}
+
+impl FromTLV<'_> for AuxiliaryType {
+    fn from_tlv(t: &TLVElement) -> Result<Self, Error>
+    where
+        Self: Sized,
+    {
+        Self::from_u8(t.u8()?).ok_or(ErrorCode::Invalid.into())
     }
 }
 
-impl From<AccessControlEntryAuthModeEnum> for AuthMode {
-    fn from(value: AccessControlEntryAuthModeEnum) -> Self {
-        match value {
-            AccessControlEntryAuthModeEnum::PASE => AuthMode::Pase,
-            AccessControlEntryAuthModeEnum::CASE => AuthMode::Case,
-            AccessControlEntryAuthModeEnum::Group => AuthMode::Group,
-        }
+impl ToTLV for AuxiliaryType {
+    fn to_tlv<W: TLVWrite>(&self, tag: &TLVTag, mut tw: W) -> Result<(), Error> {
+        tw.u8(tag, *self as _)
+    }
+
+    fn tlv_iter(&self, tag: TLVTag) -> impl Iterator<Item = Result<TLV<'_>, Error>> {
+        TLV::u8(tag, *self as _).into_tlv_iter()
     }
 }
 
@@ -216,7 +231,7 @@ const NOC_CAT_VERSION_MASK: u64 = 0xFFFF;
 const NODE_ID_RANGE: RangeInclusive<u64> = 1..=0xFFFF_FFEF_FFFF_FFFF;
 
 /// Is this identifier a NOC CAT
-pub(crate) fn is_noc_cat(id: u64) -> bool {
+pub fn is_noc_cat(id: u64) -> bool {
     ((id & NOC_CAT_SUBJECT_MASK) == NOC_CAT_SUBJECT_PREFIX)
         && ((id & (NOC_CAT_ID_MASK | NOC_CAT_VERSION_MASK)) > 0)
 }
@@ -238,7 +253,7 @@ pub fn gen_noc_cat(id: u16, version: u16) -> u32 {
 }
 
 /// Is this identifier a node id
-pub(crate) fn is_node(id: u64) -> bool {
+pub fn is_node(id: u64) -> bool {
     NODE_ID_RANGE.contains(&id)
 }
 
@@ -336,6 +351,15 @@ pub struct Accessor<'a> {
 }
 
 impl<'a> Accessor<'a> {
+    /// Create a new Accessor object for the session an operation arrived on
+    pub fn for_operation(
+        ctx: impl OperationContext,
+        matter: &'a Matter<'a>,
+    ) -> Result<Self, Error> {
+        ctx.exchange_id()
+            .accessor(matter, ctx.metadata().aux_acl_enabled())
+    }
+
     /// Create a new Accessor object for the given session
     pub fn for_session(session: &Session, matter: &'a Matter<'a>, aux_acl_enabled: bool) -> Self {
         match session.get_session_mode() {
@@ -648,7 +672,7 @@ pub struct AclEntry {
     /// The targets of the entry
     targets: Nullable<Vec<Target, MAX_TARGETS_PER_ACL_ENTRY>>,
     // TODO: Figure out what this is, document and use
-    auxiliary_type: Option<AccessControlAuxiliaryTypeEnum>,
+    auxiliary_type: Option<AuxiliaryType>,
     // Note that this field will always be `Some(NN)` when the entry is persisted in storage,
     // however, it will be `None` when the entry is coming from the other peer.
     #[tagval(crate::im::encoding::FABRIC_INDEX_TAG)]
@@ -689,168 +713,6 @@ impl AclEntry {
         })
     }
 
-    /// Return an initializer for an ACL entry object
-    /// using the given fabric index and TLV entry struct as input
-    pub fn init_with<'a>(
-        fab_idx: NonZeroU8,
-        entry: &'a AccessControlEntryStruct<'a>,
-    ) -> impl Init<Self, Error> + 'a {
-        Self::init(Some(fab_idx), Privilege::empty(), AuthMode::Pase)
-            .into_fallible()
-            .chain(|e| {
-                let auth_mode = entry.auth_mode().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
-                let privilege = entry.privilege().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
-                let subjects = entry.subjects().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
-                let targets = entry.targets().map_err(|_| ErrorCode::ConstraintError)?.ok_or(ErrorCode::ConstraintError)?;
-                let auxiliary_type = entry.auxiliary_type().map_err(|_| ErrorCode::ConstraintError)?;
-
-                // Per the Matter Core spec, the `AuxiliaryType` field SHALL
-                // NOT be present in entries in the (writable) `ACL`
-                // attribute - it is reserved for the server-generated
-                // entries in `AuxiliaryACL`.
-                if auxiliary_type.is_some() {
-                    Err(ErrorCode::ConstraintError)?;
-                }
-
-                if
-                    // As per spec, PASE auth mode is reserved for future use
-                    matches!(auth_mode, AccessControlEntryAuthModeEnum::PASE)
-                    // As per spec, Group auth mode cannot have Admin privilege
-                    || matches!(auth_mode, AccessControlEntryAuthModeEnum::Group) && matches!(privilege, AccessControlEntryPrivilegeEnum::Administer)
-                {
-                    Err(ErrorCode::ConstraintError)?;
-                }
-
-                e.privilege = privilege.into();
-                e.auth_mode = auth_mode.into();
-
-                // Start with null subjects and targets
-                // so that we can keep those to null if we receive empty subjects' array or empty targets' array
-                // This is what the YAML tests expect
-                e.subjects.clear();
-                e.targets.clear();
-
-                if let Some(subjects) = subjects.into_option() {
-                    for subject in subjects {
-                        if e.subjects.is_none() {
-                            // Initialize our subjects to non-null lazily, only if we have at least one incoming subject
-                            // This ensures that if the incoming subjects is empty, we keep our subjects as null
-                            // which is what the YAML tests expect, even if we internally treat null and empty subjects the same way
-                            e.subjects.reinit(Nullable::init_some(Vec::init()));
-                        }
-
-                        let esubjects = unwrap!(e.subjects.as_opt_mut());
-
-                        let subject = subject?;
-
-                        if matches!(auth_mode, AccessControlEntryAuthModeEnum::CASE) && !is_node(subject) && !is_noc_cat(subject) {
-                            // As per spec, CASE auth mode only allows node ids and NOC CATs as subjects
-                            Err(ErrorCode::ConstraintError)?;
-                        }
-
-                        if matches!(auth_mode, AccessControlEntryAuthModeEnum::Group) {
-                            // Per Matter Core spec: for Group auth mode, the
-                            // subject SHALL be a valid 16-bit Group ID. Group ID 0 is reserved
-                            // and MUST NOT be used; values larger than `u16::MAX` are also invalid.
-                            if subject == 0 || subject > u16::MAX as u64 {
-                                Err(ErrorCode::ConstraintError)?;
-                            }
-                        }
-
-                        // As per spec, on too many subjects we should return a FAILURE status code
-                        // `ErrorCode::BufferTooSmall` translates to a generic FAILURE status code
-                        esubjects
-                            .push(subject)
-                            .map_err(|_| ErrorCode::BufferTooSmall)?;
-                    }
-                }
-
-                if let Some(targets) = targets.into_option() {
-                    for target in targets {
-                        if e.targets.is_none() {
-                            // Initialize our targets to non-null lazily, only if we have at least one incoming target
-                            // This ensures that if the incoming targets is empty, we keep our targets as null
-                            // which is what the YAML tests expect, even if we internally treat null and empty targets the same way
-                            e.targets.reinit(Nullable::init_some(Vec::init()));
-                        }
-
-                        let etargets = unwrap!(e.targets.as_opt_mut());
-
-                        let target = target?;
-
-                        // Matter Core spec (AccessControlTargetStruct):
-                        // - At least one of cluster, endpoint or deviceType SHALL be present.
-                        // - If endpoint is present, deviceType SHALL NOT be present (and vice
-                        //   versa). cluster may be combined with either endpoint or deviceType.
-                        let has_endpoint = target.endpoint()?.is_some();
-                        let has_cluster = target.cluster()?.is_some();
-                        let has_device_type = target.device_type()?.is_some();
-
-                        if (!has_endpoint && !has_cluster && !has_device_type)
-                            || (has_endpoint && has_device_type)
-                        {
-                            Err(ErrorCode::ConstraintError)?;
-                        }
-
-                        // As per spec, on too many targets we should return a FAILURE status code
-                        // `ErrorCode::BufferTooSmall` translates to a generic FAILURE status code
-                        etargets
-                            .push(Target::new(
-                                target.endpoint()?.into_option(),
-                                target.cluster()?.into_option(),
-                                target.device_type()?.into_option(),
-                            ))
-                            .map_err(|_| ErrorCode::BufferTooSmall)?;
-                    }
-                }
-
-                Ok(())
-            })
-    }
-
-    /// Return the data of the ACL entry object
-    /// into the provided TLV builder
-    pub fn read_into<P: TLVBuilderParent>(
-        &self,
-        accessing_fab_idx: u8,
-        fab_idx: Option<u8>,
-        builder: AccessControlEntryStructBuilder<P>,
-    ) -> Result<P, Error> {
-        let same_fab_idx = Some(accessing_fab_idx) == fab_idx;
-
-        builder
-            .privilege(same_fab_idx.then(|| self.privilege.into()))?
-            .auth_mode(same_fab_idx.then(|| self.auth_mode.into()))?
-            .subjects()?
-            .with_some_if(same_fab_idx, |builder| {
-                builder.with_non_null(self.subjects(), |subjects, mut builder| {
-                    for subject in *subjects {
-                        builder = builder.push(subject)?;
-                    }
-
-                    builder.end()
-                })
-            })?
-            .targets()?
-            .with_some_if(same_fab_idx, |builder| {
-                builder.with_non_null(self.targets(), |targets, mut builder| {
-                    for target in *targets {
-                        builder = builder
-                            .push()?
-                            .cluster(Nullable::new(target.cluster))?
-                            .endpoint(Nullable::new(target.endpoint))?
-                            .device_type(Nullable::new(target.device_type))?
-                            .end()?;
-                    }
-
-                    builder.end()
-                })
-            })?
-            .auxiliary_type(self.auxiliary_type())?
-            .fabric_index(fab_idx)?
-            .end()
-    }
-
     /// Normalize the ACL entry by converting non-null but empty
     /// subjects/targets to null, as the spec and YAML tests expect
     pub fn normalize(&mut self) {
@@ -873,9 +735,24 @@ impl AclEntry {
         }
     }
 
+    /// Return the privilege of the ACL entry
+    pub fn privilege(&self) -> Privilege {
+        self.privilege
+    }
+
+    /// Set the privilege of the ACL entry
+    pub fn set_privilege(&mut self, privilege: Privilege) {
+        self.privilege = privilege;
+    }
+
     /// Return the auth mode of the ACL entry
     pub fn auth_mode(&self) -> AuthMode {
         self.auth_mode
+    }
+
+    /// Set the auth mode of the ACL entry
+    pub fn set_auth_mode(&mut self, auth_mode: AuthMode) {
+        self.auth_mode = auth_mode;
     }
 
     /// Return the subjects of the ACL entry
@@ -888,7 +765,8 @@ impl AclEntry {
         Nullable::new(self.targets.as_opt_ref().map(|v| v.as_slice()))
     }
 
-    pub fn auxiliary_type(&self) -> Option<AccessControlAuxiliaryTypeEnum> {
+    /// Return the auxiliary type of the ACL entry, if it is an auxiliary one
+    pub fn auxiliary_type(&self) -> Option<AuxiliaryType> {
         self.auxiliary_type
     }
 
@@ -955,7 +833,7 @@ impl AclEntry {
         // whole node. (Explicitly-listed targets are unaffected.)
         if aux_acl_enabled
             && matches!(self.auth_mode, AuthMode::Group)
-            && object.path.endpoint == Some(crate::dm::endpoints::ROOT_ENDPOINT_ID)
+            && object.path.endpoint == Some(crate::dm::ROOT_ENDPOINT_ID)
             && self
                 .targets
                 .as_opt_ref()

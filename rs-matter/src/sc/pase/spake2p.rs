@@ -32,6 +32,10 @@ use crate::crypto::{
     HASH_ZEROED, HMAC_HASH_LEN, HMAC_HASH_ZEROED, UINT320_CANON_LEN,
 };
 use crate::error::{Error, ErrorCode};
+pub use crate::pairing::{
+    Spake2pVerifierPassword, Spake2pVerifierPasswordRef, SPAKE2P_VERIFIER_PASSWORD_LEN,
+    SPAKE2P_VERIFIER_PASSWORD_ZEROED,
+};
 use crate::sc::SCStatusCodes;
 use crate::utils::init::{init, Init};
 
@@ -40,8 +44,6 @@ pub const SPAKE2P_ITERATION_COUNT: u32 = 2000;
 pub const SPAKE2P_KE_LEN: usize = 16;
 
 pub const SPAKE2P_W_LEN: usize = UINT320_CANON_LEN * 2;
-
-pub const SPAKE2P_VERIFIER_PASSWORD_LEN: usize = 4;
 
 pub const SPAKE2P_VERIFIER_STR_LEN: usize = EC_CANON_SCALAR_LEN + EC_CANON_POINT_LEN;
 
@@ -60,12 +62,6 @@ pub const SPAKE2P_SESSION_KEYS_LEN: usize = AEAD_CANON_KEY_LEN * 3;
 
 canon!(SPAKE2P_KE_LEN, SPAKE2P_KE_ZEROED, Spake2pKe, Spake2pKeRef);
 canon!(SPAKE2P_W_LEN, SPAKE2P_W_ZEROED, Spake2pW, Spake2pWRef);
-canon!(
-    SPAKE2P_VERIFIER_PASSWORD_LEN,
-    SPAKE2P_VERIFIER_PASSWORD_ZEROED,
-    Spake2pVerifierPassword,
-    Spake2pVerifierPasswordRef
-);
 canon!(
     SPAKE2P_VERIFIER_STR_LEN,
     SPAKE2P_VERIFIER_STR_ZEROED,

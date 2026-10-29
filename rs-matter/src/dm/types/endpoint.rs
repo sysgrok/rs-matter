@@ -19,6 +19,9 @@ use core::fmt;
 
 use super::{Cluster, ClusterId, DeviceType, EndptId, SemanticTag};
 
+/// The ID of the root endpoint (Endpoint 0)
+pub const ROOT_ENDPOINT_ID: EndptId = 0;
+
 /// A type modeling the endpoint meta-data in the Matter data model.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

@@ -101,6 +101,7 @@ const NODE: Node<'static> = Node {
 };
 
 fn data_model<'a, OH: OnOffHooks, LH: LevelControlHooks>(
+    matter: &'a Matter<'a>,
     mut rand: impl Rng + Copy,
     on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
 ) -> impl DataModel + 'a {
@@ -108,7 +109,7 @@ fn data_model<'a, OH: OnOffHooks, LH: LevelControlHooks>(
         NODE,
         endpoints::EthSysHandlerBuilder::new()
             .netif_diag(&UnixNetifs)
-            .build(rand)
+            .build(matter, rand)
             .chain(
                 |e, c| e == 1 && c == desc::DescHandler::CLUSTER.id,
                 Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
@@ -168,7 +169,7 @@ async fn run() -> Result<(), Error> {
         device_a,
         &crypto,
         buffers_a,
-        data_model(crypto.rand()?, &on_off_a),
+        data_model(device_a, crypto.rand()?, &on_off_a),
         &kv_a,
         state_a,
     );
@@ -197,7 +198,7 @@ async fn run() -> Result<(), Error> {
         device_b,
         &crypto,
         buffers_b,
-        data_model(crypto.rand()?, &on_off_b),
+        data_model(device_b, crypto.rand()?, &on_off_b),
         &kv_b,
         state_b,
     );

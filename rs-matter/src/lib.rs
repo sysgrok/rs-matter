@@ -34,21 +34,19 @@
 
 use core::num::NonZeroU8;
 
-use crate::crypto::Crypto;
-use crate::dm::clusters::basic_info::{
-    self, BasicInfoConfig, BasicInfoSettings, FULL_CLUSTER as BASIC_INFO_CLUSTER,
+use crate::attest::DeviceAttestation;
+use crate::basic_info::{
+    BasicInfoConfig, BasicInfoSettings, BASIC_INFO_CLUSTER_ID, CONFIGURATION_VERSION_ATTR_ID,
 };
-use crate::dm::clusters::dev_att::DeviceAttestation;
-use crate::dm::clusters::gen_diag::BootReasonEnum;
-use crate::dm::clusters::icd_mgmt::IcdAdvertisement;
-use crate::dm::clusters::net_comm::{self, Networks};
-use crate::dm::clusters::time_sync::Rtc;
-use crate::dm::endpoints::ROOT_ENDPOINT_ID;
-use crate::dm::AttrChangeNotifier;
+use crate::crypto::Crypto;
+use crate::dm::ROOT_ENDPOINT_ID;
+use crate::dm::{AttrChangeNotifier, EndptId, GroupMembership};
 use crate::error::{Error, ErrorCode};
 use crate::fabric::Fabrics;
 use crate::failsafe::{FailSafe, DEFAULT_FAILSAFE_EXPIRY_SECS};
 use crate::handover::{CommissioningHandover, HandoverRegulatory};
+use crate::icd::IcdAdvertisement;
+use crate::networks::{load_networks, Networks};
 use crate::pairing::qr::{
     no_optional_data, CommFlowType, NoOptionalData, Qr, QrPayload, QrTextType,
 };
@@ -57,9 +55,10 @@ use crate::persist::{
     KvBlobStore, KvBlobStoreAccess, MatterKvBlobStoreAccess, Persist, OPERATIONAL_HOURS_KEY,
     REBOOT_COUNT_KEY,
 };
+use crate::rtc::Rtc;
 #[cfg(feature = "case-resumption")]
 use crate::sc::case::ResumableSessions;
-use crate::sc::pase::spake2p::{Spake2pVerifierPassword, SPAKE2P_VERIFIER_SALT_ZEROED};
+use crate::sc::pase::spake2p::SPAKE2P_VERIFIER_SALT_ZEROED;
 use crate::sc::pase::{CommWindowState, Pase};
 use crate::transport::network::MatterLocalService;
 use crate::transport::network::{NetworkMulticast, NetworkReceive, NetworkSend};
@@ -86,6 +85,7 @@ pub(crate) mod fmt;
 
 pub mod acl;
 pub mod attest;
+pub mod basic_info;
 pub mod bdx;
 pub mod cert;
 pub mod crypto;
@@ -94,8 +94,12 @@ pub mod error;
 pub mod fabric;
 pub mod failsafe;
 pub mod group_keys;
+#[cfg(feature = "groups")]
+pub mod groupcast;
 pub mod handover;
+pub mod icd;
 pub mod im;
+pub mod networks;
 pub mod onboard;
 pub mod ota;
 pub mod pairing;
@@ -103,10 +107,13 @@ pub mod persist;
 #[cfg(feature = "pics")]
 pub mod pics;
 pub mod respond;
+pub mod rtc;
 pub mod sc;
 pub mod tlv;
 pub mod transport;
 pub mod utils;
+
+pub use crate::pairing::BasicCommData;
 
 /// Re-export several crates
 ///
@@ -139,15 +146,20 @@ macro_rules! alloc {
 /// The Matter UDP port
 pub const MATTER_PORT: u16 = 5540;
 
-/// Device basic commissioning data
-#[derive(Debug, Clone)]
+/// The reason for the latest boot of the node.
+///
+/// The values are the ones of the General Diagnostics cluster.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct BasicCommData {
-    /// The password which is necessary to authenticate the device in either
-    /// initial commissioning, or when the basic commissioning window is opened
-    pub password: Spake2pVerifierPassword,
-    /// The 12-bit discriminator used to differentiate between multiple devices
-    pub discriminator: u16,
+#[repr(u8)]
+pub enum BootReason {
+    Unspecified = 0,
+    PowerOnReboot = 1,
+    BrownOutReset = 2,
+    SoftwareWatchdogReset = 3,
+    HardwareWatchdogReset = 4,
+    SoftwareUpdateCompleted = 5,
+    SoftwareReset = 6,
 }
 
 /// The primary Matter Object
@@ -181,7 +193,7 @@ pub struct Matter<'a> {
     /// path, the Interaction Model's invoke processing and the Groupcast
     /// cluster handler. See `dm::clusters::groupcast::TestingBridge`.
     #[cfg(feature = "groups")]
-    groupcast_testing: crate::dm::clusters::groupcast::TestingBridge,
+    groupcast_testing: crate::groupcast::TestingBridge,
     /// Fires when the Trusted Time Source is set, changed or cleared.
     time_source_changed: Notification,
 }
@@ -212,7 +224,7 @@ impl<'a> Matter<'a> {
             dev_att,
             port,
             #[cfg(feature = "groups")]
-            groupcast_testing: crate::dm::clusters::groupcast::TestingBridge::new(),
+            groupcast_testing: crate::groupcast::TestingBridge::new(),
             kv_buf: Mutex::new(RefCell::new([0; crate::persist::KV_BUF_SIZE])),
             time_source_changed: Notification::new(),
         }
@@ -246,7 +258,7 @@ impl<'a> Matter<'a> {
                     dev_comm,
                     dev_att,
                     port,
-                    groupcast_testing <- crate::dm::clusters::groupcast::TestingBridge::init(),
+                    groupcast_testing <- crate::groupcast::TestingBridge::init(),
                     kv_buf <- Mutex::init(RefCell::init(crate::utils::init::zeroed())),
                     time_source_changed <- Notification::init(),
                 }
@@ -365,12 +377,12 @@ impl<'a> Matter<'a> {
     /// `GeneralDiagnostics::BootReason`.
     ///
     /// `Unspecified` unless the platform sets it with [`Matter::set_boot_reason`].
-    pub fn boot_reason(&self) -> BootReasonEnum {
+    pub fn boot_reason(&self) -> BootReason {
         self.with_state(|state| state.boot_reason)
     }
 
     /// Set the reason for the node's latest boot. Call once at startup.
-    pub fn set_boot_reason(&self, reason: BootReasonEnum) {
+    pub fn set_boot_reason(&self, reason: BootReason) {
         self.with_state(|state| state.boot_reason = reason);
     }
 
@@ -579,11 +591,13 @@ impl<'a> Matter<'a> {
         &self,
         disc_caps: DiscoveryCapabilities,
     ) -> Result<QrPayload<'_, NoOptionalData>, Error> {
-        let payload = QrPayload::new_from_basic_info(
+        let payload = QrPayload::new(
             disc_caps,
             CommFlowType::Standard,
             self.dev_comm.clone(),
-            self.dev_det,
+            self.dev_det.vid,
+            self.dev_det.pid,
+            self.dev_det.serial_no,
             no_optional_data as _,
         );
 
@@ -706,8 +720,8 @@ impl<'a> Matter<'a> {
 
             notify.notify_attr_changed(
                 ROOT_ENDPOINT_ID,
-                BASIC_INFO_CLUSTER.id,
-                basic_info::AttributeId::ConfigurationVersion as _,
+                BASIC_INFO_CLUSTER_ID,
+                CONFIGURATION_VERSION_ATTR_ID,
             );
 
             Ok::<_, Error>(new_version)
@@ -762,7 +776,7 @@ impl<'a> Matter<'a> {
 
     /// Return the Groupcast testing-mode bridge.
     #[cfg(feature = "groups")]
-    pub(crate) fn groupcast_testing(&self) -> &crate::dm::clusters::groupcast::TestingBridge {
+    pub fn groupcast_testing(&self) -> &crate::groupcast::TestingBridge {
         &self.groupcast_testing
     }
 
@@ -854,7 +868,7 @@ impl<'a> Matter<'a> {
                 |_, _| {},
             )?;
 
-            net_comm::load_networks(&mut networks, networks_key, &kv)?;
+            load_networks(&mut networks, networks_key, &kv)?;
 
             Ok(result)
         })
@@ -967,7 +981,7 @@ impl<'a> Matter<'a> {
                     |_, _| {},
                 );
 
-                let _ = net_comm::load_networks(&mut networks, networks_key, &kv);
+                let _ = load_networks(&mut networks, networks_key, &kv);
 
                 return Err(err);
             }
@@ -1163,6 +1177,50 @@ impl<'a> Matter<'a> {
     }
 }
 
+impl GroupMembership for Matter<'_> {
+    fn is_member(
+        &self,
+        fab_idx: NonZeroU8,
+        group_id: u16,
+        endpoint_id: EndptId,
+    ) -> Result<bool, Error> {
+        #[cfg(feature = "groups")]
+        {
+            self.with_state(|state| {
+                let fabric = state.fabrics.fabric(fab_idx)?;
+
+                Ok(fabric
+                    .groups()
+                    .get(group_id)
+                    .map(|g| g.endpoints.contains(&endpoint_id))
+                    .unwrap_or(false))
+            })
+        }
+
+        // Without multicast group support the group table is empty
+        #[cfg(not(feature = "groups"))]
+        {
+            let _ = (fab_idx, group_id, endpoint_id);
+            Ok(false)
+        }
+    }
+}
+
+// Only the name, so that the types holding a `&Matter` (e.g. the system
+// cluster handlers) can derive `Debug`
+impl core::fmt::Debug for Matter<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Matter").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for Matter<'_> {
+    fn format(&self, f: defmt::Formatter<'_>) {
+        defmt::write!(f, "Matter {{ .. }}")
+    }
+}
+
 /// The internal state of the Matter Object
 ///
 /// Public for unit tests.
@@ -1192,7 +1250,7 @@ pub struct MatterState {
     /// The operational hours on record at `Matter::startup`.
     operational_hours: u32,
     /// The reason for the latest boot, as set by the platform.
-    boot_reason: BootReasonEnum,
+    boot_reason: BootReason,
 }
 
 impl MatterState {
@@ -1211,7 +1269,7 @@ impl MatterState {
             icd_adv: None,
             reboot_count: 0,
             operational_hours: 0,
-            boot_reason: BootReasonEnum::Unspecified,
+            boot_reason: BootReason::Unspecified,
         }
     }
 
@@ -1231,7 +1289,7 @@ impl MatterState {
             icd_adv: None,
             reboot_count: 0,
             operational_hours: 0,
-            boot_reason: BootReasonEnum::Unspecified,
+            boot_reason: BootReason::Unspecified,
         })
     }
 
@@ -1248,7 +1306,7 @@ impl MatterState {
             icd_adv: None,
             reboot_count: 0,
             operational_hours: 0,
-            boot_reason: BootReasonEnum::Unspecified,
+            boot_reason: BootReason::Unspecified,
         })
     }
 }
@@ -1256,11 +1314,11 @@ impl MatterState {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub mod test {
-    use crate::dm::clusters::gen_diag::BootReasonEnum;
     use crate::fabric::tests::{MemKv, MemKvBlobStore};
     use crate::persist::{KvBlobStoreAccess, OPERATIONAL_HOURS_KEY};
     use crate::tlv::{TLVTag, ToTLV};
     use crate::utils::storage::WriteBuf;
+    use crate::BootReason;
     use crate::Matter;
 
     pub fn test_matter() -> Matter<'static> {
@@ -1297,9 +1355,9 @@ pub mod test {
         matter.persist_operational_hours(&kv).unwrap();
         assert!(store.contains_key(OPERATIONAL_HOURS_KEY));
 
-        assert_eq!(matter.boot_reason(), BootReasonEnum::Unspecified);
-        matter.set_boot_reason(BootReasonEnum::BrownOutReset);
-        assert_eq!(matter.boot_reason(), BootReasonEnum::BrownOutReset);
+        assert_eq!(matter.boot_reason(), BootReason::Unspecified);
+        matter.set_boot_reason(BootReason::BrownOutReset);
+        assert_eq!(matter.boot_reason(), BootReason::BrownOutReset);
 
         matter.factory_reset(&kv).unwrap();
 

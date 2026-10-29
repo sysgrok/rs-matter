@@ -192,9 +192,9 @@ first rows. Line counts are hand-written lines in the current code.
 | `rs-matter-error` | `Error`, `ErrorCode` (unchanged) | 0.5K | - | all |
 | `rs-matter-utils` | `utils`, without the zbus proxies | 8K | error | all except error |
 | `rs-matter-tlv` | TLV | 9.1K | - | all below |
-| `rs-matter-crypto` | `Crypto` traits, canonical types, rand, backends (by feature), group key derivation | 6.7K | tlv | cert, dm-base, node, im, dm, onboard |
+| `rs-matter-crypto` | `Crypto` traits, canonical types, rand, backends (by feature), group key derivation | 6.7K | tlv | cert, pairing, dm-base, node, im, dm, onboard |
 | `rs-matter-cert` | operational certificates, x509 and CSR, attestation (DAC chain, CD, trust store), `DeviceAttestation` | 7.7K | tlv, crypto | node, dm, onboard |
-| `rs-matter-pairing` | QR, manual code and NFC payloads, QR scanning | 2.6K | tlv | node |
+| `rs-matter-pairing` | QR, manual code and NFC payloads, QR scanning, `BasicCommData` and the passcode types | 2.6K | tlv, crypto | node |
 | `rs-matter-im-base` | IM message encoding, protocol constants and opcodes, IDs, `ImTransaction` | 6.9K | tlv | dm-base, dm-clusters, node, im, dm, onboard |
 | `rs-matter-dm-base` | data model metadata (`Node`, `Endpoint`, `Cluster`, ...), access, dataver, `Handler` / `AsyncHandler`, context traits, `Reply`, change notifiers, event writer, `LifecycleOp`, `ImStats`, `ExchangeId`, persistence traits | 6.5K | tlv, im-base, crypto | dm-clusters, node, im, dm, onboard |
 | `rs-matter-dm-clusters` | generated: types, builders, metadata, handler traits, adaptors, client views; owns the codegen `build.rs` | (775K generated) | tlv, im-base, dm-base | dm, onboard |
@@ -228,13 +228,21 @@ Notes:
 
 Node state that is defined in handler modules today moves to `node`:
 
-- `BasicInfoConfig` and `BasicInfoSettings`. `ProductAppearance` leaves `BasicInfoConfig`
-  and becomes part of the Basic Information handler's own configuration, because the node
-  never reads it.
-- `Rtc`; `UtcTime` moves to `utils` next to `epoch`, because certificate validation uses it.
-- `IcdAdvertisement`.
-- The Groupcast testing bridge.
-- `Networks`, `NetworksError`, `WirelessCreds` and `load_networks`.
+- `BasicInfoConfig` and `BasicInfoSettings` (module `basic_info`). `ProductAppearance`
+  stays in `BasicInfoConfig`, with small node enums for the finish and the color, so that
+  the root endpoint builders keep their signatures. The area type of the device location
+  (94 values) is stored as its `u8` value; the handler converts it back.
+- `Rtc` (module `rtc`). `UtcTime` is already in `utils`, next to `epoch`.
+- `IcdAdvertisement` (module `icd`).
+- The Groupcast testing bridge (module `groupcast`).
+- `Networks`, `NetworksError`, `WirelessCreds`, the functions that load, store and remove
+  networks, and the Thread dataset reader `ThreadTLV` (module `networks`).
+  `WirelessCreds::check_match` becomes `NetworkType::check_creds`, because `NetworkType`
+  stays with the Network Commissioning handler.
+- `BootReason`, next to `Matter`.
+
+The modules keep their old paths through re-exports from the handler modules, for example
+`dm::clusters::basic_info::BasicInfoConfig`.
 
 `DeviceAttestation` moves to `cert`, and `BasicCommData` moves to `pairing`. Pairing takes
 the vendor and product IDs instead of `BasicInfoConfig`, and the conversion of a QR payload
@@ -246,14 +254,18 @@ The node stops using generated types:
   conversions to and from the generated `AccessControlEntryStruct` move to the ACL handler.
 - The node defines its own small enums where it stores a value today typed with a generated
   enum: boot reason, ICD operating mode, multicast address policy, regulatory location type,
-  and the Groupcast testing enums. The handlers in `dm` map between the two with plain
-  functions, since `dm` is the only crate that sees both.
-- Cluster IDs used for change notifications (Administrator Commissioning, Operational
-  Credentials, Basic Information) become plain constants. The same applies to the cluster
-  and event IDs the IM engine uses to emit the StartUp, ShutDown and BootReason events.
-- The Linux Wi-Fi and Thread drivers (`transport/network/wifi/{nm,wpa_supp}`,
-  `transport/network/thread/otbr`) implement the Network Commissioning and diagnostics
-  traits. They move to `dm`, next to those traits and to `dm::networks`.
+  time granularity and time source, product finish and color, and the Groupcast testing
+  enums. The values are the same, so persisted data does not change. The handlers in `dm`
+  map between the two with plain functions, since `dm` is the only crate that sees both.
+- Cluster, attribute and event IDs used for change notifications and events become plain
+  constants: Administrator Commissioning, Operational Credentials, Basic Information
+  (`ConfigurationVersion`), Time Synchronization (the clock's attributes and its
+  `MissingTrustedTimeSource` event), and the StartUp, ShutDown and BootReason events the
+  IM engine emits.
+- The Linux Wi-Fi and Thread drivers (`transport::network::wifi::{nm, wpa_supp}`,
+  `transport::network::thread::otbr`) implement the Network Commissioning and diagnostics
+  traits. They move to `dm`, next to those traits, as `dm::networks::wifi::{nm, wpa_supp}`
+  and `dm::networks::thread::otbr`.
 
 The data model types stop depending on code above them:
 
@@ -276,7 +288,16 @@ Smaller items:
   error crate gets an optional `bluer` dependency, enabled by the node's `bluer` feature. The
   other conversions (`std::io::Error`, `PoisonError`, `SystemTimeError`, `num_enum`) need
   only a `std` feature.
-- Test data used across crates (`dm::devices::test`: DAC, PAI and keys) moves to `cert`.
+- `Error` implements the `embedded-io-async` error trait. The error crate is below `utils`,
+  so it depends on `embedded-io-async` directly, as the one exception to using it through
+  `utils::io`. This is acceptable because the error crate is expected to be redesigned, and
+  likely to go away, with the per-crate errors.
+- The test device data (`dm::devices::test`) goes to `node`, because it includes a
+  `BasicInfoConfig` and a `BasicCommData`. The test DAC private key, which the test crypto
+  setup needs, moves to `crypto`.
+- The application clusters' unit tests record events with the IM engine's event queue
+  (`dm::clusters::app::test_util`). `dm` gets `im` as a dev-dependency for this. There is no
+  cycle, because `im` does not depend on `dm`.
 
 ## 7. What is not split
 
@@ -320,7 +341,7 @@ No new crates yet. Each item compiles and passes the tests on its own.
 3. The moves of section 6: the node state, the node's own enums and constants, the drivers,
    and the data model types' links to code above them.
 4. A module-level dependency check that maps each module to its future crate and confirms
-   that the resulting crate graph has no cycles.
+   that the resulting crate graph has no cycles: `xtask/scripts/crate_split_deps.py`.
 
 This step contains all the design decisions and can be reviewed on its own.
 

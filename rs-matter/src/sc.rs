@@ -25,8 +25,8 @@ use crate::crypto::Crypto;
 use crate::dm::AttrChangeNotifier;
 use crate::error::{Error, ErrorCode};
 use crate::im::IM_REVISION;
-use crate::respond::ExchangeHandler;
 use crate::tlv::{FromTLV, ToTLV};
+use crate::transport::exchange::ExchangeHandler;
 use crate::transport::exchange::{Exchange, MessageMeta};
 use crate::transport::mrp;
 use crate::utils::init::InitMaybeUninit;
@@ -440,8 +440,8 @@ mod tests {
         BasicInfoConfig, DEFAULT_DATA_MODEL_REVISION, DEFAULT_MATTER_SPEC_VERSION,
         DEFAULT_MAX_PATHS_PER_INVOKE,
     };
-    use crate::dm::clusters::icd_mgmt::{IcdAdvertisement, OperatingModeEnum};
     use crate::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+    use crate::icd::{IcdAdvertisement, IcdOperatingMode};
     use crate::im::IM_REVISION;
     use crate::transport::mrp::MRP_BASE_RETRY_INTERVAL_MS;
     use crate::Matter;
@@ -488,14 +488,14 @@ mod tests {
 
         let matter = Matter::new(&DEV_DET, TEST_DEV_COMM, &TEST_DEV_ATT, 0);
 
-        matter.set_icd_advertisement(Some(adv(Some(OperatingModeEnum::SIT), 15_000)));
+        matter.set_icd_advertisement(Some(adv(Some(IcdOperatingMode::Sit), 15_000)));
         let params = SessionParameters::local(&matter);
         assert_eq!(
             (params.sai, params.sii, params.sat),
             (Some(700), Some(15_000), Some(5000))
         );
 
-        matter.set_icd_advertisement(Some(adv(Some(OperatingModeEnum::LIT), 300_000)));
+        matter.set_icd_advertisement(Some(adv(Some(IcdOperatingMode::Lit), 300_000)));
         let params = SessionParameters::local(&matter);
         assert_eq!((params.sii, params.sat), (Some(300_000), Some(5000)));
 

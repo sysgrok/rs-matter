@@ -16,47 +16,30 @@
  */
 
 use core::fmt::Display;
-use core::future::Future;
 use core::pin::{pin, Pin};
 
 use crate::crypto::Crypto;
-use crate::dm::{DataModel, ReportDataHandler};
+use crate::dm::{DataModel, IMBuffer};
 use crate::error::Error;
 use crate::im::busy::BusyInteractionModel;
 use crate::im::events::DEFAULT_MAX_EVENTS_BUF_SIZE;
 use crate::im::subscriptions::DEFAULT_MAX_SUBSCRIPTIONS;
-use crate::im::{IMBuffer, InteractionModel, PROTO_ID_INTERACTION_MODEL};
+use crate::im::ReportDataHandler;
+use crate::im::{InteractionModel, PROTO_ID_INTERACTION_MODEL};
 use crate::persist::KvBlobStoreAccess;
 use crate::sc::busy::BusySecureChannel;
 use crate::sc::SecureChannel;
 use crate::transport::exchange::Exchange;
+
+pub use crate::transport::exchange::ExchangeHandler;
 use crate::utils::futures::{select, select_slice, Coalesce};
 use crate::utils::storage::pooled::Buffers;
 use crate::utils::storage::Vec;
-use crate::utils::sync::{MaybeSend, MaybeSendSync};
 use crate::Matter;
 
 /// Send a busy response if - after that many ms - the exchange
 /// is still not accepted by the regular handlers.
 const RESPOND_BUSY_MS: u32 = 500;
-
-/// A trait modeling a generic handler for an exchange.
-///
-/// The handler takes ownership of the exchange: once handling is done, the only
-/// thing left to do with the exchange is to drop it (which ends it).
-pub trait ExchangeHandler: MaybeSendSync {
-    fn handle(&self, exchange: Exchange<'_>)
-        -> impl Future<Output = Result<(), Error>> + MaybeSend;
-}
-
-impl<T> ExchangeHandler for &T
-where
-    T: ExchangeHandler,
-{
-    fn handle(&self, exchange: Exchange<'_>) -> impl Future<Output = Result<(), Error>> {
-        (*self).handle(exchange)
-    }
-}
 
 /// A struct for chaining two exchange handlers into a single one,
 /// where each handler is handling one specific protocol (i.e. SC vs IM) in a sequential fashion.

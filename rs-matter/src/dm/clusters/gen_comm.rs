@@ -23,6 +23,7 @@ use either::Either;
 
 use rand_core::Rng;
 
+use crate::basic_info::RegulatoryLocationType;
 use crate::crypto::Crypto;
 use crate::dm::{
     Cluster, Dataver, InvokeContext, LifecycleOp, OperationContext, ReadContext, WriteContext,
@@ -32,9 +33,10 @@ use crate::fabric::FabricPersist;
 use crate::persist::Persist;
 use crate::sc::pase::MAX_COMM_WINDOW_TIMEOUT_SECS;
 use crate::tlv::{Nullable, Octets, OctetsBuilder, TLVBuilderParent};
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::SessionMode;
 use crate::utils::sync::MaybeSendSync;
-use crate::{except, with, MatterState};
+use crate::{except, with, Matter, MatterState};
 
 pub use crate::dm::clusters::decl::general_commissioning::*;
 
@@ -132,14 +134,21 @@ impl CommPolicy for bool {
 /// The system implementation of a handler for the General Commissioning Matter cluster.
 pub struct GenCommHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     commissioning_policy: &'a dyn CommPolicy,
 }
 
 impl<'a> GenCommHandler<'a> {
-    /// Create a new instance of `GenCommHandler` with the given `Dataver` and `CommissioningPolicy`.
-    pub const fn new(dataver: Dataver, commissioning_policy: &'a dyn CommPolicy) -> Self {
+    /// Create a new instance of `GenCommHandler` with the given `Dataver` and `CommissioningPolicy`,
+    /// commissioning `matter`.
+    pub const fn new(
+        dataver: Dataver,
+        matter: &'a Matter<'a>,
+        commissioning_policy: &'a dyn CommPolicy,
+    ) -> Self {
         Self {
             dataver,
+            matter,
             commissioning_policy,
         }
     }
@@ -153,11 +162,15 @@ impl<'a> GenCommHandler<'a> {
     /// fabric of this session.
     ///
     /// If the check fail, an appropriate error is returned.
-    pub(crate) fn with_armed_failsafe<F, T>(ctx: impl OperationContext, f: F) -> Result<T, Error>
+    pub(crate) fn with_armed_failsafe<'m, F, T>(
+        matter: &'m Matter<'m>,
+        ctx: impl OperationContext,
+        f: F,
+    ) -> Result<T, Error>
     where
         F: FnOnce(&mut MatterState, &mut dyn FnMut()) -> Result<T, Error>,
     {
-        Self::with_armed_failsafe_ex(ctx, f)
+        Self::with_armed_failsafe_ex(matter, ctx, f)
     }
 
     /// Return whether the supplied `NewRegulatoryConfig` value is allowed
@@ -182,20 +195,19 @@ impl<'a> GenCommHandler<'a> {
     /// fabric of this session.
     ///
     /// If the check fail, an appropriate error is returned.
-    pub(crate) fn with_armed_failsafe_ex<F, T, E>(ctx: impl OperationContext, f: F) -> Result<T, E>
+    pub(crate) fn with_armed_failsafe_ex<'m, F, T, E>(
+        matter: &'m Matter<'m>,
+        ctx: impl OperationContext,
+        f: F,
+    ) -> Result<T, E>
     where
         F: FnOnce(&mut MatterState, &mut dyn FnMut()) -> Result<T, E>,
         E: From<Error>,
     {
-        let mut notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let mut notify_mdns = || matter.transport().notify_comm_window_changed();
 
-        ctx.exchange().with_state_ex(|state| {
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+        ctx.exchange_id().with_state_ex(matter, |state| {
+            let sess = ctx.exchange_id().session(&mut state.sessions);
 
             state
                 .failsafe
@@ -213,13 +225,12 @@ impl<'a> GenCommHandler<'a> {
 
     /// Return the node's `RecoveryIdentifier`, minting and persisting a stable
     /// random 64-bit value on first access.
-    fn recovery_identifier_value(ctx: &impl ReadContext) -> Result<u64, Error> {
+    fn recovery_identifier_value(&self, ctx: &impl ReadContext) -> Result<u64, Error> {
         // Fast path: the value has already been minted (this read, a prior
         // read, or a reload from persistence).
-        if let Some(id) = ctx
-            .exchange()
-            .with_state(|state| Ok(state.basic_info_settings.recovery_identifier))?
-        {
+        if let Some(id) = ctx.exchange_id().with_state(self.matter, |state| {
+            Ok(state.basic_info_settings.recovery_identifier)
+        })? {
             return Ok(id);
         }
 
@@ -228,7 +239,7 @@ impl<'a> GenCommHandler<'a> {
 
         let mut persist = Persist::new(ctx.kv());
 
-        let id = ctx.exchange().with_state(|state| {
+        let id = ctx.exchange_id().with_state(self.matter, |state| {
             // Re-check under the state borrow: a concurrent read may have
             // minted the value first, in which case we keep the stored one.
             let id = *state
@@ -279,12 +290,12 @@ impl ClusterHandler for GenCommHandler<'_> {
     }
 
     fn breadcrumb(&self, ctx: impl ReadContext) -> Result<u64, Error> {
-        ctx.exchange()
-            .with_state(|state| Ok(state.failsafe.breadcrumb()))
+        ctx.exchange_id()
+            .with_state(self.matter, |state| Ok(state.failsafe.breadcrumb()))
     }
 
     fn set_breadcrumb(&self, ctx: impl WriteContext, value: u64) -> Result<(), Error> {
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             state.failsafe.set_breadcrumb(value);
 
             Ok(())
@@ -309,10 +320,11 @@ impl ClusterHandler for GenCommHandler<'_> {
         // Until `SetRegulatoryConfig` stores an explicit value, report
         // `LocationCapability` - per the Matter Core spec that is the
         // default of `RegulatoryConfig`.
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             Ok(state
                 .basic_info_settings
                 .location_type
+                .map(regulatory_location_to_cluster)
                 .unwrap_or(self.commissioning_policy.location_cap()))
         })
     }
@@ -336,7 +348,7 @@ impl ClusterHandler for GenCommHandler<'_> {
         // The 8-byte, big-endian encoding of the stable random identifier.
         // The same byte sequence is what a Recovery Node would carry in its
         // BLE Network-Recovery advertisement (see `RecoveryAdvData`).
-        let id = Self::recovery_identifier_value(&ctx)?;
+        let id = self.recovery_identifier_value(&ctx)?;
 
         builder.set(Octets::new(&id.to_be_bytes()))
     }
@@ -375,16 +387,11 @@ impl ClusterHandler for GenCommHandler<'_> {
         let mut expiry = None;
 
         let status = if expiry_length_seconds == 0 {
-            let notify_mdns = || {
-                ctx.exchange()
-                    .matter()
-                    .transport()
-                    .notify_comm_window_changed()
-            };
+            let notify_mdns = || self.matter.transport().notify_comm_window_changed();
             let notify_change = |endpt_id, clust_id| ctx.notify_cluster_changed(endpt_id, clust_id);
 
-            CommissioningErrorEnum::map(ctx.exchange().with_state(|state| {
-                let sess = ctx.exchange().id().session(&mut state.sessions);
+            CommissioningErrorEnum::map(ctx.exchange_id().with_state(self.matter, |state| {
+                let sess = ctx.exchange_id().session(&mut state.sessions);
                 let pase_sess_id =
                     matches!(sess.get_session_mode(), SessionMode::Pase { .. }).then(|| sess.id());
 
@@ -400,8 +407,8 @@ impl ClusterHandler for GenCommHandler<'_> {
                 Ok(())
             }))?
         } else {
-            CommissioningErrorEnum::map(ctx.exchange().with_state(|state| {
-                let sess = ctx.exchange().id().session(&mut state.sessions);
+            CommissioningErrorEnum::map(ctx.exchange_id().with_state(self.matter, |state| {
+                let sess = ctx.exchange_id().session(&mut state.sessions);
 
                 state.failsafe.arm(
                     expiry_length_seconds,
@@ -412,10 +419,7 @@ impl ClusterHandler for GenCommHandler<'_> {
             }))?
         };
 
-        ctx.exchange()
-            .matter()
-            .transport()
-            .notify_timeouts_changed();
+        self.matter.transport().notify_timeouts_changed();
 
         // Outside `with_state`, since the broadcasts run the handlers inline
         if let Some(expiry) = expiry {
@@ -469,16 +473,18 @@ impl ClusterHandler for GenCommHandler<'_> {
 
         let mut persist = Persist::new(ctx.kv());
 
-        let status = CommissioningErrorEnum::map(ctx.exchange().with_state(|state| {
-            state.basic_info_settings.set_location(country_code);
-            state.basic_info_settings.location_type = Some(location_type);
+        let status =
+            CommissioningErrorEnum::map(ctx.exchange_id().with_state(self.matter, |state| {
+                state.basic_info_settings.set_location(country_code);
+                state.basic_info_settings.location_type =
+                    Some(regulatory_location_from_cluster(location_type));
 
-            state.failsafe.set_breadcrumb(breadcrumb);
+                state.failsafe.set_breadcrumb(breadcrumb);
 
-            state.basic_info_settings.store_persist(&mut persist)?;
+                state.basic_info_settings.store_persist(&mut persist)?;
 
-            Ok(())
-        }))?;
+                Ok(())
+            }))?;
 
         persist.run()?;
 
@@ -501,9 +507,11 @@ impl ClusterHandler for GenCommHandler<'_> {
         // The commissioning fails rather than succeeding without the fabric
         let mut persist = FabricPersist::strict(ctx.kv());
 
-        let status =
-            CommissioningErrorEnum::map(Self::with_armed_failsafe(&ctx, |state, notify_mdns| {
-                let sess = ctx.exchange().id().session(&mut state.sessions);
+        let status = CommissioningErrorEnum::map(Self::with_armed_failsafe(
+            self.matter,
+            &ctx,
+            |state, notify_mdns| {
+                let sess = ctx.exchange_id().session(&mut state.sessions);
                 // Spec: on
                 // `CommissioningComplete` the PASE session SHALL be
                 // terminated. The current command is being delivered over
@@ -543,10 +551,11 @@ impl ClusterHandler for GenCommHandler<'_> {
 
                 state.pase.close_comm_window(notify_mdns, notify_change)?;
                 state.sessions.remove_pase(pase_sess_id);
-                ctx.exchange().matter().transport().notify_session_removed();
+                self.matter.transport().notify_session_removed();
 
                 Ok(())
-            }))?;
+            },
+        ))?;
 
         persist.run()?;
 
@@ -589,5 +598,25 @@ impl Debug for GenCommHandler<'_> {
 impl defmt::Format for GenCommHandler<'_> {
     fn format(&self, fmt: defmt::Formatter) {
         defmt::write!(fmt, "GenCommHandler {{ dataver: {} }}", self.dataver);
+    }
+}
+
+/// Convert a regulatory location type of the cluster to the node's one
+fn regulatory_location_from_cluster(
+    location: RegulatoryLocationTypeEnum,
+) -> RegulatoryLocationType {
+    match location {
+        RegulatoryLocationTypeEnum::Indoor => RegulatoryLocationType::Indoor,
+        RegulatoryLocationTypeEnum::Outdoor => RegulatoryLocationType::Outdoor,
+        RegulatoryLocationTypeEnum::IndoorOutdoor => RegulatoryLocationType::IndoorOutdoor,
+    }
+}
+
+/// Convert a regulatory location type of the node to the cluster's one
+fn regulatory_location_to_cluster(location: RegulatoryLocationType) -> RegulatoryLocationTypeEnum {
+    match location {
+        RegulatoryLocationType::Indoor => RegulatoryLocationTypeEnum::Indoor,
+        RegulatoryLocationType::Outdoor => RegulatoryLocationTypeEnum::Outdoor,
+        RegulatoryLocationType::IndoorOutdoor => RegulatoryLocationTypeEnum::IndoorOutdoor,
     }
 }

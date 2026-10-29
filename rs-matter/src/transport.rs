@@ -54,6 +54,7 @@ use crate::utils::ipv6::compute_group_multicast_addr;
 use crate::utils::storage::{pooled::Buffers, ParseBuf, Vec, WriteBuf};
 use crate::utils::timers::{with_timeout, Duration, Timer};
 
+use crate::transport::exchange::ExchangeIdInternal as _;
 use crate::utils::sync::blocking::Mutex;
 use crate::utils::sync::{
     IfMultiMutex, IfMultiMutexGuard, IfMutex, MultiNotification, MultiSignal, Notification,
@@ -1535,7 +1536,7 @@ impl<'a, C: Crypto> TransportRunner<'a, C> {
         fabrics: &crate::fabric::Fabrics,
         e: &Error,
     ) {
-        use crate::dm::clusters::groupcast;
+        use crate::groupcast;
 
         // Only multicast group *data* messages participate (not unicast
         // group-encrypted MCSP control messages)
@@ -1546,19 +1547,19 @@ impl<'a, C: Crypto> TransportRunner<'a, C> {
         let Some(mode) = self
             .matter
             .groupcast_testing()
-            .armed(groupcast::GroupcastTestingEnum::EnableListenerTesting)
+            .armed(groupcast::TestingOperation::Listener)
         else {
             return;
         };
 
         let (result, authenticated) = match e.code() {
             // No candidate key was available to even attempt decryption
-            ErrorCode::NoSession => (groupcast::GroupcastTestResultEnum::NoAvailableKey, false),
+            ErrorCode::NoSession => (groupcast::TestResult::NoAvailableKey, false),
             // Candidate key(s) were tried, none authenticated the message
-            ErrorCode::InvalidSignature => (groupcast::GroupcastTestResultEnum::FailedAuth, false),
+            ErrorCode::InvalidSignature => (groupcast::TestResult::FailedAuth, false),
             // Authenticated, but a duplicate of an already-received message
-            ErrorCode::Duplicate => (groupcast::GroupcastTestResultEnum::MessageReplay, true),
-            _ => (groupcast::GroupcastTestResultEnum::GeneralError, false),
+            ErrorCode::Duplicate => (groupcast::TestResult::MessageReplay, true),
+            _ => (groupcast::TestResult::GeneralError, false),
         };
 
         self.matter
@@ -1605,13 +1606,13 @@ impl<'a, C: Crypto> TransportRunner<'a, C> {
                             // address. Duplicate enumeration of the shared
                             // address is fine - the join/leave reconciliation
                             // below is idempotent per address.
-                            use crate::dm::clusters::decl::groupcast::MulticastAddrPolicyEnum;
+                            use crate::fabric::MulticastAddrPolicy;
 
                             match group.effective_mcast_policy() {
-                                MulticastAddrPolicyEnum::IanaAddr => {
+                                MulticastAddrPolicy::IanaAddr => {
                                     crate::utils::ipv6::IANA_GROUPCAST_MULTICAST_ADDR
                                 }
-                                MulticastAddrPolicyEnum::PerGroup => {
+                                MulticastAddrPolicy::PerGroup => {
                                     compute_group_multicast_addr(fabric.fabric_id(), group.group_id)
                                 }
                             }
@@ -2969,8 +2970,10 @@ impl MessageCounters {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
     use crate::crypto::test_only_crypto;
     use crate::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+    use crate::transport::exchange::ExchangeIdExt as _;
 
     fn test_matter() -> Matter<'static> {
         Matter::new(&TEST_DEV_DET, TEST_DEV_COMM, &TEST_DEV_ATT, 0)

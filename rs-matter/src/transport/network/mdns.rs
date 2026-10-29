@@ -22,9 +22,10 @@ use cfg_if::cfg_if;
 
 use domain::base::name::{Label, ToLabelIter};
 
-use crate::dm::clusters::basic_info::BasicInfoConfig;
-use crate::dm::clusters::icd_mgmt::{IcdAdvertisement, OperatingModeEnum};
+use crate::basic_info::BasicInfoConfig;
 use crate::error::{Error, ErrorCode};
+use crate::icd::{IcdAdvertisement, IcdOperatingMode};
+use crate::pairing::qr::QrPayload;
 use crate::tlv::EitherIter;
 use crate::transport::mrp;
 use crate::utils::storage::{write_split, String, Vec, WriteBuf};
@@ -114,8 +115,8 @@ impl MatterLocalService {
         // while operating as SIT, "1" as LIT. A non-ICD device omits it (empty
         // value, dropped by the filters below).
         let txt_icd = match icd.and_then(|icd| icd.operating_mode) {
-            Some(OperatingModeEnum::LIT) => "1",
-            Some(OperatingModeEnum::SIT) => "0",
+            Some(IcdOperatingMode::Lit) => "1",
+            Some(IcdOperatingMode::Sit) => "0",
             None => "",
         };
 
@@ -555,6 +556,44 @@ pub struct CommissionableFilter {
 }
 
 impl CommissionableFilter {
+    /// A filter that discovers the device a QR code describes.
+    ///
+    /// A QR code carries the **full 12-bit** discriminator, so this filters on
+    /// `discriminator` and can narrow discovery to a single device. (Contrast
+    /// [`Self::for_pairing_code`], which can only filter on the short
+    /// discriminator.)
+    ///
+    /// Only the discriminator is set. The vendor and product IDs are deliberately
+    /// *not* included even though the QR carries them: per the Matter Core spec a
+    /// device may advertise an **anonymized** Product ID of 0 during discovery, so
+    /// filtering on the QR's PID would fail to find such a device. Add them to the
+    /// returned filter if the extra selectivity is wanted and the device is known
+    /// not to anonymize.
+    pub fn for_qr_code(qr: &QrPayload<'_, &[u8]>) -> Self {
+        Self {
+            discriminator: Some(qr.discriminator()),
+            ..Default::default()
+        }
+    }
+
+    /// A filter that discovers the device a manual pairing code (parsed with
+    /// [`QrPayload::parse_pairing_code`]) describes.
+    ///
+    /// A manual pairing code only carries the **short** (4-bit) discriminator, so
+    /// this necessarily filters on `short_discriminator` - which narrows discovery
+    /// to 1-in-16 devices rather than to exactly one. The short value must not end
+    /// up in the full-discriminator field, where it would match nothing.
+    ///
+    /// The vendor and product IDs are not included even when the 21-digit variant
+    /// carries them, since a device may advertise an anonymized Product ID of 0
+    /// during discovery.
+    pub fn for_pairing_code(code: &QrPayload<'_, ()>) -> Self {
+        Self {
+            short_discriminator: Some(code.short_discriminator()),
+            ..Default::default()
+        }
+    }
+
     /// Build the mDNS service type string for browsing commissionable devices.
     ///
     /// If the filter specifies a discriminator, short discriminator, vendor ID,
@@ -1190,6 +1229,34 @@ fn parse_hex_u64(s: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn commissionable_filter_uses_the_right_discriminator_field() {
+        // A QR carries the full 12-bit discriminator...
+        let mut buf = [0; 128];
+        let qr = unwrap!(
+            QrPayload::parse("MT:-24J0AFN00KA064IJ3P0IXZB0DK5N1K8SQ1RYCU1-A40", &mut buf),
+            "Failed to parse"
+        );
+        let filter = CommissionableFilter::for_qr_code(&qr);
+
+        assert_eq!(filter.discriminator, Some(3840));
+        assert_eq!(filter.short_discriminator, None);
+
+        // ... while a manual pairing code only carries the upper 4 bits, which must
+        // land in `short_discriminator` (0xF00 >> 8 == 15) and *not* in the
+        // full-discriminator field, where it would match nothing.
+        let manual = unwrap!(QrPayload::parse_pairing_code("34970112332"), "Failed");
+        let filter = CommissionableFilter::for_pairing_code(&manual);
+
+        assert_eq!(filter.short_discriminator, Some(15));
+        assert_eq!(filter.discriminator, None);
+
+        // Neither constrains vendor/product: a device may advertise an anonymized
+        // Product ID of 0 during discovery.
+        assert_eq!(filter.vendor_id, None);
+        assert_eq!(filter.product_id, None);
+    }
+
     /// The `SII` a LIT-capable device advertises follows its operating mode:
     /// its configured (LIT) idle interval as a LIT, the slow poll in effect
     /// while it operates as a SIT; a SIT-only device and a non-ICD one
@@ -1231,8 +1298,8 @@ mod tests {
             })
         };
 
-        let sit = Some(OperatingModeEnum::SIT);
-        let lit = Some(OperatingModeEnum::LIT);
+        let sit = Some(IcdOperatingMode::Sit);
+        let lit = Some(IcdOperatingMode::Lit);
 
         assert_eq!(sii(&configured, adv(sit, 15_000)), Some(15_000));
         assert_eq!(sii(&configured, adv(sit, 5_000)), Some(5_000));

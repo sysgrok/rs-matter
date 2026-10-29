@@ -36,6 +36,7 @@ use crate::sc::{
 };
 use crate::tlv::{FromTLV, OctetStr, TLVElement, TagType, ToTLV};
 use crate::transport::exchange::Exchange;
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::{PeerMrpParams, ReservedSession, SessionMode};
 use crate::utils::storage::ReadBuf;
 

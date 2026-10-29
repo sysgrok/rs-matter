@@ -25,10 +25,10 @@ use crate::crypto::{
     AEAD_CANON_KEY_LEN, AEAD_KEY_ZEROED, AEAD_TAG_LEN, AEAD_TAG_ZEROED, HASH_LEN, HASH_ZEROED,
     PKC_CANON_PUBLIC_KEY_LEN, PKC_PUBLIC_KEY_ZEROED, PKC_SHARED_SECRET_ZEROED,
 };
-use crate::dm::clusters::time_sync::UtcTime;
 use crate::error::{Error, ErrorCode};
 use crate::fabric::Fabric;
 use crate::tlv::{Optional, TLVElement, TLVTag, TLVWrite};
+use crate::utils::epoch::UtcTime;
 use crate::utils::init::{init, Init};
 use crate::utils::storage::WriteBuf;
 

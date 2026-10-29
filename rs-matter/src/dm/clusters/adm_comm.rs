@@ -27,10 +27,11 @@ use crate::error::{Error, ErrorCode};
 use crate::sc::pase::spake2p::SPAKE2P_VERIFIER_SALT_ZEROED;
 use crate::sc::pase::{CommWindowOpener, CommWindowType};
 use crate::tlv::Nullable;
-use crate::MatterState;
+use crate::{Matter, MatterState};
 
 pub use crate::dm::clusters::decl::administrator_commissioning::*;
 use crate::transport::exchange::ExchangeId;
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::SessionMode;
 
 /// PAKE iteration count bounds (Matter Core spec).
@@ -56,14 +57,16 @@ fn cluster_status_err(ctx: &impl InvokeContext, status: StatusCode) -> Error {
 /// The system implementation of a handler for the Administrative Commissioning Matter cluster.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct AdminCommHandler {
+pub struct AdminCommHandler<'a> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
 }
 
-impl AdminCommHandler {
-    /// Create a new instance of `AdminCommHandler` with the given `Dataver`.
-    pub const fn new(dataver: Dataver) -> Self {
-        Self { dataver }
+impl<'a> AdminCommHandler<'a> {
+    /// Create a new instance of `AdminCommHandler` with the given `Dataver`,
+    /// managing the commissioning windows of `matter`.
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>) -> Self {
+        Self { dataver, matter }
     }
 
     /// Adapt the handler instance to the generic `rs-matter` `Handler` trait
@@ -88,7 +91,7 @@ impl AdminCommHandler {
     }
 }
 
-impl ClusterHandler for AdminCommHandler {
+impl ClusterHandler for AdminCommHandler<'_> {
     const CLUSTER: Cluster<'static> = FULL_CLUSTER.with_features(Feature::BASIC.bits());
 
     fn dataver(&self) -> u32 {
@@ -100,15 +103,10 @@ impl ClusterHandler for AdminCommHandler {
     }
 
     fn window_status(&self, ctx: impl ReadContext) -> Result<CommissioningWindowStatusEnum, Error> {
-        let notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let notify_mdns = || self.matter.transport().notify_comm_window_changed();
         let notify_change = |_, _| ctx.notify_own_cluster_changed();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             state
                 .pase
                 .check_comm_window_timeout(notify_mdns, notify_change)?;
@@ -126,15 +124,10 @@ impl ClusterHandler for AdminCommHandler {
     }
 
     fn admin_fabric_index(&self, ctx: impl ReadContext) -> Result<Nullable<u8>, Error> {
-        let notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let notify_mdns = || self.matter.transport().notify_comm_window_changed();
         let notify_change = |_, _| ctx.notify_own_cluster_changed();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             state
                 .pase
                 .check_comm_window_timeout(notify_mdns, notify_change)?;
@@ -154,15 +147,10 @@ impl ClusterHandler for AdminCommHandler {
     }
 
     fn admin_vendor_id(&self, ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
-        let notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let notify_mdns = || self.matter.transport().notify_comm_window_changed();
         let notify_change = |_, _| ctx.notify_own_cluster_changed();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             state
                 .pase
                 .check_comm_window_timeout(notify_mdns, notify_change)?;
@@ -182,12 +170,7 @@ impl ClusterHandler for AdminCommHandler {
         ctx: impl InvokeContext,
         request: OpenCommissioningWindowRequest<'_>,
     ) -> Result<(), Error> {
-        let notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let notify_mdns = || self.matter.transport().notify_comm_window_changed();
         let notify_change = |_, _| ctx.notify_own_cluster_changed();
 
         // Validate the PAKE parameters up front so we can surface
@@ -208,12 +191,12 @@ impl ClusterHandler for AdminCommHandler {
             return Err(cluster_status_err(&ctx, StatusCode::PAKEParameterError));
         }
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             state
                 .pase
                 .check_comm_window_timeout(notify_mdns, notify_change)?;
 
-            let opener = Self::current_window_opener(state, &ctx.exchange().id());
+            let opener = Self::current_window_opener(state, &ctx.exchange_id());
 
             let mdns_id = ctx.crypto().rand()?.next_u64();
 
@@ -239,21 +222,16 @@ impl ClusterHandler for AdminCommHandler {
         ctx: impl InvokeContext,
         request: OpenBasicCommissioningWindowRequest<'_>,
     ) -> Result<(), Error> {
-        let notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let notify_mdns = || self.matter.transport().notify_comm_window_changed();
         let notify_change = |_, _| ctx.notify_own_cluster_changed();
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             state
                 .pase
                 .check_comm_window_timeout(notify_mdns, notify_change)?;
 
-            let opener = Self::current_window_opener(state, &ctx.exchange().id());
-            let dev_comm = ctx.exchange().matter().dev_comm();
+            let opener = Self::current_window_opener(state, &ctx.exchange_id());
+            let dev_comm = self.matter.dev_comm();
 
             let crypto = ctx.crypto();
             let mut rand = crypto.rand()?;
@@ -280,12 +258,7 @@ impl ClusterHandler for AdminCommHandler {
     }
 
     fn handle_revoke_commissioning(&self, ctx: impl InvokeContext) -> Result<(), Error> {
-        let notify_mdns = || {
-            ctx.exchange()
-                .matter()
-                .transport()
-                .notify_comm_window_changed()
-        };
+        let notify_mdns = || self.matter.transport().notify_comm_window_changed();
         let notify_change = |_, _| ctx.notify_own_cluster_changed();
 
         // Per Matter Core spec (and CHIP's
@@ -307,13 +280,13 @@ impl ClusterHandler for AdminCommHandler {
         //     we do it explicitly here so accumulated dangling PASE sessions
         //     don't confuse the commissioner across multiple rounds (see
         //     TC_CGEN_2_4, which iterates open / commission / revoke 8x).
-        let expiry = ctx.exchange().with_state(|state| {
+        let expiry = ctx.exchange_id().with_state(self.matter, |state| {
             // If RevokeCommissioning came in over a PASE session, don't
             // drop it before we've sent the response — mark it as expired
             // instead so it lingers just long enough for the in-flight
             // exchange to complete, then can't accept new ones.
             // `Failsafe::expire` does the actual `remove_pase` call.
-            let sess = ctx.exchange().id().session(&mut state.sessions);
+            let sess = ctx.exchange_id().session(&mut state.sessions);
             let expire_sess_id = matches!(
                 sess.get_session_mode(),
                 crate::transport::session::SessionMode::Pase { .. }
@@ -329,7 +302,7 @@ impl ClusterHandler for AdminCommHandler {
                 notify_change,
             )?;
 
-            ctx.exchange().matter().transport().notify_session_removed();
+            self.matter.transport().notify_session_removed();
 
             Ok::<_, Error>(expiry)
         })?;
@@ -339,7 +312,7 @@ impl ClusterHandler for AdminCommHandler {
             expiry.notify(&ctx);
         }
 
-        ctx.exchange().with_state(|state| {
+        ctx.exchange_id().with_state(self.matter, |state| {
             state
                 .pase
                 .close_comm_window(notify_mdns, notify_change)

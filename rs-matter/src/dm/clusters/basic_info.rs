@@ -17,574 +17,41 @@
 
 //! This module contains the implementation of the Basic Information cluster and its handler.
 
-use core::str::FromStr;
-
-use crate::dm::{Cluster, Dataver, InvokeContext, ReadContext, WriteContext};
+use crate::dm::{Cluster, Dataver, ExchangeId, InvokeContext, ReadContext, WriteContext};
 use crate::error::{Error, ErrorCode};
-use crate::persist::{KvBlobStore, KvBlobStoreAccess, Persist, BASIC_INFO_KEY};
+use crate::persist::Persist;
 use crate::tlv::{
-    FromTLV, Nullable, NullableBuilder, TLVBuilderParent, TLVElement, ToTLV, Utf8StrBuilder,
+    FromTLV, Nullable, NullableBuilder, TLVBuilderParent, TLVElement, TLVTag, TLVWrite,
+    Utf8StrBuilder,
 };
-use crate::transport::exchange::Exchange;
-use crate::transport::session::CASE_SESSIONS_PER_FABRIC;
-use crate::utils::bitflags::bitflags;
-use crate::utils::init::{init, Init};
-use crate::utils::storage::String;
-use crate::{except, with};
+use crate::transport::exchange::ExchangeIdExt as _;
+use crate::utils::storage::WriteBuf;
+use crate::{except, with, Matter};
 
+pub use crate::basic_info::{
+    BasicInfoConfig, BasicInfoSettings, CapabilityMinima, DeviceLocation, DeviceLocationConfig,
+    PairingHintFlags, ProductAppearance, ProductColor, ProductFinish, DEFAULT_DATA_MODEL_REVISION,
+    DEFAULT_MATTER_SPEC_VERSION, DEFAULT_MAX_PATHS_PER_INVOKE,
+    DEFAULT_MIN_SUBSCRIPTION_MAX_INTERVAL_SECS,
+};
 pub use crate::dm::clusters::decl::basic_information::*;
-pub use crate::dm::clusters::decl::general_commissioning::RegulatoryLocationTypeEnum;
 pub use crate::dm::clusters::decl::globals::{
     AreaTypeTag, LocationDescriptorStruct, LocationDescriptorStructBuilder,
 };
 
-/// The default Matter App Clusters specification version
-///
-/// Currently set to V1.6.0.0.
-pub const DEFAULT_MATTER_SPEC_VERSION: u32 = 0x01060000;
-
-/// The default Matter Data Model revision
-///
-/// Currently set to V21, which was released with Matter Core spec V1.6
-pub const DEFAULT_DATA_MODEL_REVISION: u16 = 21;
-
-/// The default maximum number of paths that can be included in an Invoke request
-///
-/// Set to 5, which is enough to support typical batched invokes while
-/// keeping the in-memory CommandRef tracking buffer in `dm::invoke()` small.
-pub const DEFAULT_MAX_PATHS_PER_INVOKE: u16 = 5;
-
-/// The default for [`BasicInfoConfig::min_subscription_max_interval_secs`].
-pub const DEFAULT_MIN_SUBSCRIPTION_MAX_INTERVAL_SECS: u16 = 40;
-
-bitflags! {
-    #[repr(transparent)]
-    #[derive(Default)]
-    #[cfg_attr(not(feature = "defmt"), derive(Debug, Copy, Clone, Eq, PartialEq, Hash))]
-    pub struct PairingHintFlags: u32 {
-        /// Power Cycle False The Device will automatically enter Commissioning Mode upon
-        /// power cycle (unplug/replug, remove/re-insert batteries).
-        /// This bit SHALL be set to 1 for devices using Standard Commissioning Flow,
-        /// and set to 0 otherwise.
-        const POWER_CYCLE = 0x0000_0001;
-        /// This SHALL be set to 1 for devices requiring Custom Commissioning
-        /// Flow before they can be available for Commissioning by any Commissioner.
-        /// For such a flow, the user SHOULD be sent to the URL specified in the
-        /// CommissioningCustomFlowUrl of the DeviceModel schema entry indexed by the
-        /// Vendor ID and Product ID (e.g., as found in the announcement) in the
-        /// Distributed Compliance Ledger.
-        const DEV_MANUFACTURER_URL = 0x0000_0002;
-        /// The Device has been commissioned. Any Administrator that commissioned the
-        /// device provides a user interface that may be used to put the device
-        /// into Commissioning Mode.
-        const ADMINISTRATOR = 0x0000_0004;
-        /// The settings menu on the Device provides instructions to put it
-        /// into Commissioning Mode.
-        const SETTINGS_MENU = 0x0000_0008;
-        /// The PI key/value pair describes a custom way to put the Device into
-        /// Commissioning Mode. This Custom Instruction option is NOT recommended
-        /// for use by a Device that does not have knowledge of the user's language preference.
-        const CUSTOM_INSTRUCTION = 0x0000_0010;
-        /// The Device Manual provides special instructions to put the Device
-        /// into Commissioning Mode (see "UserManualUrl" in the Core Spec).
-        /// This is a catchall option to capture user interactions that are not codified by
-        /// other options in this flags type.
-        const DEVICE_MANUAL = 0x0000_0020;
-        /// The Device will enter Commissioning Mode when reset button is pressed.
-        const PRESS_RESET_BUTTON = 0x0000_0040;
-        /// The Device will enter Commissioning Mode when reset button is pressed when applying power to it.
-        const PRESS_RESET_BUTTON_WITH_POWER = 0x0000_0080;
-        /// The Device will enter Commissioning Mode when reset button is pressed for N seconds.
-        /// The exact value of N SHALL be made available via PI key.
-        const PRESS_RESET_BUTTON_FOR_N_SECONDS = 0x0000_0100;
-        /// The Device will enter Commissioning Mode when reset button is pressed until associated light blinks.
-        /// Information on color of light MAY be made available via PI key.
-        const PRESS_RESET_BUTTON_UNTIL_LIGHT_BLINKS = 0x0000_0200;
-        /// The Device will enter Commissioning Mode when reset button is pressed for N seconds
-        /// when applying power to it. The exact value of N SHALL be made available via PI key.
-        const PRESS_RESET_BUTTON_FOR_N_SECONDS_WITH_POWER = 0x0000_0400;
-        /// The Device will enter Commissioning Mode when reset button is pressed until associated
-        /// light blinks when applying power to the Device. Information on color of light MAY be
-        /// made available via PI key.
-        const PRESS_RESET_BUTTON_UNTIL_LIGHT_BLINKS_WITH_POWER = 0x0000_0800;
-        /// The Device will enter Commissioning Mode when reset button is pressed N times
-        /// with maximum 1 second between each press. The exact value of N SHALL be made available via PI key.
-        const PRESS_RESET_BUTTON_N_TIMES = 0x0000_1000;
-        /// The Device will enter Commissioning Mode when setup button is pressed.
-        const PRESS_SETUP_BUTTON = 0x0000_2000;
-        /// The Device will enter Commissioning Mode when setup button is pressed when applying power to it.
-        const PRESS_SETUP_BUTTON_WITH_POWER = 0x0000_4000;
-        /// The Device will enter Commissioning Mode when setup button is pressed for N seconds.
-        /// The exact value of N SHALL be made available via PI key.
-        const PRESS_SETUP_BUTTON_FOR_N_SECONDS = 0x0000_8000;
-        /// The Device will enter Commissioning Mode when setup button is pressed until associated
-        /// light blinks. Information on color of light MAY be made available via PI key.
-        const PRESS_SETUP_BUTTON_UNTIL_LIGHT_BLINKS = 0x0001_0000;
-        /// The Device will enter Commissioning Mode when setup button is pressed for N seconds
-        /// when applying power to it. The exact value of N SHALL be made available via PI key.
-        const PRESS_SETUP_BUTTON_FOR_N_SECONDS_WITH_POWER = 0x0002_0000;
-        /// The Device will enter Commissioning Mode when setup button is pressed until associated
-        /// light blinks when applying power to the Device. Information on color of light MAY be
-        /// made available via PI key.
-        const PRESS_SETUP_BUTTON_UNTIL_LIGHT_BLINKS_WITH_POWER = 0x0004_0000;
-        /// The Device will enter Commissioning Mode when setup button is pressed N times with
-        /// maximum 1 second between each press. The exact value of N SHALL be made available via PI key.
-        const PRESS_SETUP_BUTTON_N_TIMES = 0x0008_0000;
-    }
-}
-
-/// Factory-default value for the `BasicInformation::DeviceLocation`
-/// attribute - the borrowed, const-constructible counterpart of
-/// [`DeviceLocation`], suitable for embedding in [`BasicInfoConfig`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct DeviceLocationConfig<'a> {
-    /// Free-form location description, at most 128 bytes.
-    pub location_name: &'a str,
-    /// Floor number, when applicable.
-    pub floor_number: Option<i16>,
-    /// Area type from the common Area namespace.
-    pub area_type: Option<AreaTypeTag>,
-}
-
-/// Basic information which is immutable
-/// (i.e. valid for the lifetime of the device firmware)
-///
-/// Note that some of the fields will be reported only if their corresponding optional attributes are enabled.
-///
-/// By default, `BasicInfoHandler::CLUSTER` enables ALL optional attributes except `reachable` which is only valid for
-/// bridged devices.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct BasicInfoConfig<'a> {
-    /// Vendor name (up to 32 characters)
-    pub vendor_name: &'a str,
-    /// Vendor ID
-    pub vid: u16,
-    /// Product name (up to 32 characters)
-    pub product_name: &'a str,
-    /// Product ID
-    pub pid: u16,
-    /// Hardware version
-    pub hw_ver: u16,
-    /// Hardware version string (up to 64 characters)
-    pub hw_ver_str: &'a str,
-    /// Software version
-    pub sw_ver: u32,
-    /// Software version string (up to 64 characters)
-    pub sw_ver_str: &'a str,
-    /// Manufacturing date (up to 16 characters)
-    pub manufacturing_date: &'a str,
-    /// Part number (up to 32 characters)
-    pub part_number: &'a str,
-    /// Product URL (up to 256 characters)
-    pub product_url: &'a str,
-    /// Product label (up to 64 characters)
-    pub product_label: &'a str,
-    /// Serial number (up to 32 characters)
-    pub serial_no: &'a str,
-    /// Unique ID (up to 64 characters)
-    pub unique_id: &'a str,
-    /// Factory default for the runtime-mutable, persisted
-    /// `BasicInformation::Location` attribute
-    pub location: Option<&'a str>,
-    /// Factory default for the runtime-mutable, persisted
-    /// `BasicInformation::DeviceLocation` attribute
-    pub device_location: Option<DeviceLocationConfig<'a>>,
-    /// Capability Minima
-    pub capability_minima: CapabilityMinima,
-    /// Product Appearance
-    pub product_appearance: ProductAppearance,
-    /// Specification Version
-    pub specification_version: u32,
-    /// Data Model Revision
-    pub data_model_revision: u16,
-    /// Max Paths Per Invoke
-    pub max_paths_per_invoke: u16,
-    /// Device Name
-    ///
-    /// Not a real attribute; used in the mDNS commissioning advertisement
-    pub device_name: &'a str,
-    /// Device Type
-    ///
-    /// Not a real attribute; used in the mDNS commissioning advertisement
-    pub device_type: Option<u16>,
-    /// Pairing Hint
-    ///
-    /// Not a real attribute; used in the mDNS commissioning advertisement
-    pub pairing_hint: PairingHintFlags,
-    /// Pairing Instruction
-    ///
-    /// Not a real attribute; used in the mDNS commissioning advertisement
-    pub pairing_instruction: &'a str,
-    /// Session Active Interval in ms
-    /// If not specified, defaults to 300
-    ///
-    /// Per the Matter Core Spec, the value is a 32-bit unsigned integer and
-    /// SHALL NOT exceed 3,600,000 (1 hour in milliseconds).
-    ///
-    /// Not a real attribute, just used to configure the session timeouts
-    pub sai: Option<u32>,
-    /// Session Idle Interval in ms
-    /// If not specified, it is not advertised, and peers assume the spec
-    /// default of 500
-    ///
-    /// Per the Matter Core Spec, the value is a 32-bit unsigned integer and
-    /// SHALL NOT exceed 3,600,000 (1 hour in milliseconds).
-    ///
-    /// Not a real attribute, just used to configure the session timeouts
-    pub sii: Option<u32>,
-    /// Whether the device supports TCP transport.
-    ///
-    /// Not a real attribute; advertised via the `T` TXT record key in mDNS.
-    /// Per the Matter Core Spec, `T` is a bitmap: bit 2 (value 4)
-    /// indicates TCP server support. Required for large payloads such as WebRTC SDP
-    /// exchanges and camera snapshots.
-    pub tcp_supported: bool,
-    /// The least max interval granted to a subscription, in seconds: what the
-    /// subscriber asks for, but no less than this. A subscription with nothing to
-    /// report keeps alive halfway through its max interval, so this bounds how
-    /// often such keep-alive reports go out.
-    ///
-    /// Not used by an Intermittently Connected Device, whose subscriptions take
-    /// their max interval from its idle mode duration.
-    ///
-    /// Not a real attribute.
-    pub min_subscription_max_interval_secs: u16,
-}
-
-impl BasicInfoConfig<'_> {
-    pub const fn new() -> Self {
-        Self {
-            vid: 0,
-            pid: 0,
-            hw_ver: 0,
-            hw_ver_str: "",
-            sw_ver: 0,
-            sw_ver_str: "",
-            serial_no: "",
-            product_name: "",
-            vendor_name: "",
-            manufacturing_date: "",
-            part_number: "",
-            product_url: "",
-            product_label: "",
-            unique_id: "",
-            location: None,
-            device_location: None,
-            capability_minima: CapabilityMinima::new(),
-            product_appearance: ProductAppearance::new(),
-            specification_version: DEFAULT_MATTER_SPEC_VERSION,
-            data_model_revision: DEFAULT_DATA_MODEL_REVISION,
-            max_paths_per_invoke: DEFAULT_MAX_PATHS_PER_INVOKE,
-            device_name: "",
-            device_type: None,
-            pairing_hint: PairingHintFlags::empty(),
-            pairing_instruction: "",
-            sai: None,
-            sii: None,
-            tcp_supported: false,
-            min_subscription_max_interval_secs: DEFAULT_MIN_SUBSCRIPTION_MAX_INTERVAL_SECS,
-        }
-    }
-}
-
-impl Default for BasicInfoConfig<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Capability Minima as reported in the Basic Information cluster
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct CapabilityMinima {
-    /// Maximum CASE sessions per fabric
-    pub case_sessions_per_fabric: u16,
-    /// Maximum subscriptions per fabric
-    pub subscriptions_per_fabric: u16,
-    /// Maximum concurrent Invoke interactions processed before the node may
-    /// start answering with `BUSY`
-    pub simultaneous_invocations_supported: u16,
-    /// Minimum concurrent Write interactions the node can process
-    pub simultaneous_writes_supported: u16,
-    /// Maximum number of read paths (`AttributePathIB` + `EventPathIB`) the
-    /// node guarantees to process in a single Read Request
-    pub read_paths_supported: u16,
-    /// Maximum number of subscribe paths (`AttributePathIB` + `EventPathIB`)
-    /// the node guarantees to process in a single Subscribe Request
-    pub subscribe_paths_supported: u16,
-}
-
-/// The Matter spec mandates `CapabilityMinima.SubscriptionsPerFabric >= 3`.
-/// rs-matter sizes its default subscription table as `MAX_FABRICS * 3` (see
-/// [`DEFAULT_MAX_SUBSCRIPTIONS`](crate::im::subscriptions::DEFAULT_MAX_SUBSCRIPTIONS)),
-/// so this per-fabric minimum is what the device guarantees.
-const SUBSCRIPTIONS_PER_FABRIC: u16 = 3;
-
-/// Constraint is `1 to 10000`.
-const SIMULTANEOUS_INVOCATIONS_SUPPORTED: u16 = 1;
-/// Constraint is `1 to 10000`.
-const SIMULTANEOUS_WRITES_SUPPORTED: u16 = 1;
-/// Constraint is `9 to 10000`; see Core spec 2.11.2.1 "Read Interaction Limits".
-const READ_PATHS_SUPPORTED: u16 = 9;
-/// Constraint is `3 to 10000`; see Core spec 2.11.2.2 "Subscribe Interaction Limits".
-const SUBSCRIBE_PATHS_SUPPORTED: u16 = 3;
-
-impl CapabilityMinima {
-    /// Create a default instance of `CapabilityMinima`, with the CASE sessions
-    /// each fabric is guaranteed and the spec-minimum subscriptions per fabric.
-    pub const fn new() -> Self {
-        Self {
-            case_sessions_per_fabric: CASE_SESSIONS_PER_FABRIC as _,
-            subscriptions_per_fabric: SUBSCRIPTIONS_PER_FABRIC,
-            simultaneous_invocations_supported: SIMULTANEOUS_INVOCATIONS_SUPPORTED,
-            simultaneous_writes_supported: SIMULTANEOUS_WRITES_SUPPORTED,
-            read_paths_supported: READ_PATHS_SUPPORTED,
-            subscribe_paths_supported: SUBSCRIBE_PATHS_SUPPORTED,
-        }
-    }
-}
-
-impl Default for CapabilityMinima {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Product Appearance as reported in the Basic Information cluster
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct ProductAppearance {
-    /// Product finish type
-    pub finish: ProductFinishEnum,
-    /// Product primary color
-    pub color: Option<ColorEnum>,
-}
-
-impl ProductAppearance {
-    /// Create a default instance of `ProductAppearance`,
-    /// with `Other` finish and no color.
-    pub const fn new() -> Self {
-        Self {
-            finish: ProductFinishEnum::Other,
-            color: None,
-        }
-    }
-}
-
-impl Default for ProductAppearance {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Owned mirror of the `LocationDescriptorStruct` global type, as stored for
-/// the `BasicInformation::DeviceLocation` attribute.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, ToTLV, FromTLV)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct DeviceLocation {
-    /// Free-form location description, at most 128 bytes.
-    pub location_name: String<128>,
-    /// Floor number, when applicable; `Null` on the wire when `None`.
-    pub floor_number: Option<i16>,
-    /// Area type from the common Area namespace; `Null` on the wire when
-    /// `None`.
-    pub area_type: Option<AreaTypeTag>,
-}
-
-impl DeviceLocation {
-    /// Create an empty `DeviceLocation` (empty location name, no floor
-    /// number, no area type).
-    pub const fn new() -> Self {
-        Self {
-            location_name: String::new(),
-            floor_number: None,
-            area_type: None,
-        }
-    }
-}
-
-impl Default for DeviceLocation {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Mutable basic information
-#[derive(Debug, Clone, Eq, PartialEq, Hash, ToTLV, FromTLV)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct BasicInfoSettings {
-    pub node_label: String<32>,      // Max node-label as per the spec
-    pub location: Option<String<2>>, // Max location as per the spec
-    /// The regulatory location type, as set via
-    /// `GeneralCommissioning::SetRegulatoryConfig`.
-    pub location_type: Option<RegulatoryLocationTypeEnum>,
-    pub local_config_disabled: bool,
-    /// `BasicInformation::ConfigurationVersion` (Matter Core Spec).
-    /// Non-volatile, monotonically increasing, minimum 1.
-    /// Bumped by application code via
-    /// `InteractionModel::bump_configuration_version` whenever the node's
-    /// fixed-quality surface (Server/Parts list, device types, software
-    /// version, …) changes — see Matter Core Spec.
-    pub configuration_version: u32,
-    /// `BasicInformation::DeviceLocation` (provisional in the Matter 1.6
-    /// IDL): where the device is installed, admin-writable.
-    pub device_location: Option<Nullable<DeviceLocation>>,
-    /// `GeneralCommissioning::RecoveryIdentifier` (provisional in Matter 1.6):
-    /// a random 64-bit value that identifies this node during the
-    /// Network Recovery flow without revealing its Node ID.
-    ///
-    /// NOTE: keep this field *last* - the persisted-blob TLV tags are
-    /// positional, and appending preserves compatibility with blobs written
-    /// before the field existed.
-    pub recovery_identifier: Option<u64>,
-}
-
-impl BasicInfoSettings {
-    /// Create a new instance of `BasicInfoSettings`
-    pub const fn new() -> Self {
-        Self {
-            node_label: String::new(),
-            location: None,
-            location_type: None,
-            local_config_disabled: false,
-            // Spec fallback for `ConfigurationVersion` is 1 (`min 1`,
-            // Core Spec).
-            configuration_version: 1,
-            device_location: None,
-            recovery_identifier: None,
-        }
-    }
-
-    /// Return an in-place initializer for `BasicInfoSettings`
-    pub fn init() -> impl Init<Self> {
-        init!(Self {
-            node_label: String::new(),
-            location: None,
-            location_type: None,
-            local_config_disabled: false,
-            configuration_version: 1,
-            device_location: None,
-            recovery_identifier: None,
-        })
-    }
-
-    /// Resets the basic info to initial values
-    ///
-    /// # Arguments
-    /// - `flag_changed`: whether to mark the basic info settings as changed
-    pub(crate) fn reset(&mut self) {
-        self.node_label.clear();
-        self.location = None;
-        self.location_type = None;
-        self.local_config_disabled = false;
-        self.configuration_version = 1;
-        self.device_location = None;
-        self.recovery_identifier = None;
-    }
-
-    /// Bump `ConfigurationVersion` by one and return the new value.
-    ///
-    /// Saturates at `u32::MAX` (the spec gives no wrap semantics, so
-    /// staying at the max is safer than rolling over to 0 which would
-    /// violate the `min 1` constraint).
-    ///
-    /// This routine only mutates the in-memory value. Persistence and
-    /// subscriber notification are the caller's responsibility — use
-    /// `InteractionModel::bump_configuration_version` for the full
-    /// "bump + persist + notify + dataver-bump" pass.
-    pub fn bump_configuration_version(&mut self) -> u32 {
-        self.configuration_version = self.configuration_version.saturating_add(1);
-        self.configuration_version
-    }
-
-    /// Set the location (country code) to the given (2-character) value.
-    pub fn set_location(&mut self, location: &str) {
-        self.location = Some(unwrap!(String::<2>::from_str(location)));
-    }
-
-    /// Remove all basic info settings from the provided BLOB store as well as from memory
-    ///
-    /// # Arguments
-    /// - `store`: the BLOB store to remove the settings from
-    /// - `buf`: a temporary buffer to use for removing the settings
-    pub(crate) fn reset_persist<S: KvBlobStore>(
-        &mut self,
-        mut store: S,
-        buf: &mut [u8],
-    ) -> Result<(), Error> {
-        self.reset();
-
-        store.remove(BASIC_INFO_KEY, buf)?;
-
-        info!("Removed basic info settings from storage");
-
-        Ok(())
-    }
-
-    /// Load basic info settings from the provided byte slice
-    pub(crate) fn load(&mut self, data: &[u8]) -> Result<(), Error> {
-        let info = Self::from_tlv(&TLVElement::new(data))?;
-
-        self.node_label = info.node_label;
-        self.location = info.location;
-        self.location_type = info.location_type;
-        self.local_config_disabled = info.local_config_disabled;
-        self.configuration_version = info.configuration_version;
-        self.device_location = info.device_location;
-        self.recovery_identifier = info.recovery_identifier;
-
-        Ok(())
-    }
-
-    /// Store the basic info settings via the provided `Persist` instance
-    ///
-    /// # Arguments
-    /// - `persist`: the `Persist` instance to serialize the settings into
-    ///
-    /// Deliberately outlined (`inline(never)`): the settings' TLV
-    /// serialization is sizeable, and every runtime-mutable-attribute setter
-    /// ends with this call - sharing a single copy keeps it out of each
-    /// attribute-dispatch path (flash size).
-    #[inline(never)]
-    pub(crate) fn store_persist<S: KvBlobStoreAccess>(
-        &self,
-        persist: &mut Persist<S>,
-    ) -> Result<(), Error> {
-        persist.store_tlv(BASIC_INFO_KEY, self)
-    }
-
-    /// Load all basic info settings from the provided key-value store
-    pub(crate) fn load_persist<S: KvBlobStoreAccess>(&mut self, kv: S) -> Result<(), Error> {
-        self.reset();
-
-        if Persist::new(kv)
-            .load(BASIC_INFO_KEY, |data| self.load(data))?
-            .is_some()
-        {
-            info!("Loaded basic info settings from storage");
-        }
-
-        Ok(())
-    }
-}
-
-impl Default for BasicInfoSettings {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// The system implementation of a handler for the Basic Information Matter cluster.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct BasicInfoHandler(Dataver);
+pub struct BasicInfoHandler<'a> {
+    dataver: Dataver,
+    matter: &'a Matter<'a>,
+}
 
-impl BasicInfoHandler {
-    /// Create a new instance of `BasicInfoHandler` with the given `Dataver`
-    pub fn new(dataver: Dataver) -> Self {
-        Self(dataver)
+impl<'a> BasicInfoHandler<'a> {
+    /// Create a new instance of `BasicInfoHandler` with the given `Dataver`,
+    /// serving the basic information of `matter`
+    pub fn new(dataver: Dataver, matter: &'a Matter<'a>) -> Self {
+        Self { dataver, matter }
     }
 
     /// Adapt the handler instance to the generic `rs-matter` `Handler` trait
@@ -592,15 +59,15 @@ impl BasicInfoHandler {
         HandlerAdaptor(self)
     }
 
-    fn config<'a>(exchange: &'a Exchange) -> &'a BasicInfoConfig<'a> {
-        exchange.matter().dev_det()
+    fn config(&self) -> &'a BasicInfoConfig<'a> {
+        self.matter.dev_det()
     }
 
-    fn with_settings<F, R>(exchange: &Exchange, f: F) -> Result<R, Error>
+    fn with_settings<F, R>(&self, exchange_id: ExchangeId, f: F) -> Result<R, Error>
     where
         F: FnOnce(&mut BasicInfoSettings) -> Result<R, Error>,
     {
-        exchange.with_state(|state| f(&mut state.basic_info_settings))
+        exchange_id.with_state(self.matter, |state| f(&mut state.basic_info_settings))
     }
 }
 
@@ -619,7 +86,7 @@ pub const CLUSTER_DEVICE_LOCATION: Cluster<'static> = FULL_CLUSTER
     .with_attrs(except!(AttributeId::Reachable))
     .with_cmds(with!());
 
-impl ClusterHandler for BasicInfoHandler {
+impl ClusterHandler for BasicInfoHandler<'_> {
     const CLUSTER: Cluster<'static> = FULL_CLUSTER
         // Hide `Reachable` (TODO) from the default metadata.
         //
@@ -635,63 +102,63 @@ impl ClusterHandler for BasicInfoHandler {
         .with_cmds(with!());
 
     fn dataver(&self) -> u32 {
-        self.0.get()
+        self.dataver.get()
     }
 
     fn dataver_changed(&self) {
-        self.0.changed();
+        self.dataver.changed();
     }
 
-    fn data_model_revision(&self, ctx: impl ReadContext) -> Result<u16, Error> {
-        Ok(Self::config(ctx.exchange()).data_model_revision)
+    fn data_model_revision(&self, _ctx: impl ReadContext) -> Result<u16, Error> {
+        Ok(self.config().data_model_revision)
     }
 
-    fn vendor_id(&self, ctx: impl ReadContext) -> Result<u16, Error> {
-        Ok(Self::config(ctx.exchange()).vid)
+    fn vendor_id(&self, _ctx: impl ReadContext) -> Result<u16, Error> {
+        Ok(self.config().vid)
     }
 
     fn vendor_name<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         out: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        out.set(Self::config(ctx.exchange()).vendor_name)
+        out.set(self.config().vendor_name)
     }
 
-    fn product_id(&self, ctx: impl ReadContext) -> Result<u16, Error> {
-        Ok(Self::config(ctx.exchange()).pid)
+    fn product_id(&self, _ctx: impl ReadContext) -> Result<u16, Error> {
+        Ok(self.config().pid)
     }
 
     fn product_name<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         out: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        out.set(Self::config(ctx.exchange()).product_name)
+        out.set(self.config().product_name)
     }
 
-    fn hardware_version(&self, ctx: impl ReadContext) -> Result<u16, Error> {
-        Ok(Self::config(ctx.exchange()).hw_ver)
+    fn hardware_version(&self, _ctx: impl ReadContext) -> Result<u16, Error> {
+        Ok(self.config().hw_ver)
     }
 
     fn hardware_version_string<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         out: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        out.set(Self::config(ctx.exchange()).hw_ver_str)
+        out.set(self.config().hw_ver_str)
     }
 
-    fn software_version(&self, ctx: impl ReadContext) -> Result<u32, Error> {
-        Ok(Self::config(ctx.exchange()).sw_ver)
+    fn software_version(&self, _ctx: impl ReadContext) -> Result<u32, Error> {
+        Ok(self.config().sw_ver)
     }
 
     fn software_version_string<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         out: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        out.set(Self::config(ctx.exchange()).sw_ver_str)
+        out.set(self.config().sw_ver_str)
     }
 
     fn node_label<P: TLVBuilderParent>(
@@ -699,7 +166,7 @@ impl ClusterHandler for BasicInfoHandler {
         ctx: impl ReadContext,
         out: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        Self::with_settings(ctx.exchange(), |settings| {
+        self.with_settings(ctx.exchange_id(), |settings| {
             out.set(settings.node_label.as_str())
         })
     }
@@ -711,7 +178,7 @@ impl ClusterHandler for BasicInfoHandler {
 
         let mut persist = Persist::new(ctx.kv());
 
-        Self::with_settings(ctx.exchange(), |settings| {
+        self.with_settings(ctx.exchange_id(), |settings| {
             settings.node_label.clear();
             settings
                 .node_label
@@ -732,9 +199,9 @@ impl ClusterHandler for BasicInfoHandler {
         // Until a value is set at runtime (`Location` write /
         // `SetRegulatoryConfig`), report the factory default from
         // `BasicInfoConfig`, falling back to the "unknown" country code.
-        let config = Self::config(ctx.exchange());
+        let config = self.config();
 
-        Self::with_settings(ctx.exchange(), |settings| {
+        self.with_settings(ctx.exchange_id(), |settings| {
             out.set(
                 settings
                     .location
@@ -752,7 +219,7 @@ impl ClusterHandler for BasicInfoHandler {
 
         let mut persist = Persist::new(ctx.kv());
 
-        Self::with_settings(ctx.exchange(), |settings| {
+        self.with_settings(ctx.exchange_id(), |settings| {
             settings.set_location(location);
 
             settings.store_persist(&mut persist)
@@ -763,10 +230,10 @@ impl ClusterHandler for BasicInfoHandler {
 
     fn capability_minima<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: CapabilityMinimaStructBuilder<P>,
     ) -> Result<P, Error> {
-        let cm = Self::config(ctx.exchange()).capability_minima;
+        let cm = self.config().capability_minima;
 
         builder
             .case_sessions_per_fabric(cm.case_sessions_per_fabric)?
@@ -778,21 +245,20 @@ impl ClusterHandler for BasicInfoHandler {
             .end()
     }
 
-    fn specification_version(&self, ctx: impl ReadContext) -> Result<u32, Error> {
-        Ok(Self::config(ctx.exchange()).specification_version)
+    fn specification_version(&self, _ctx: impl ReadContext) -> Result<u32, Error> {
+        Ok(self.config().specification_version)
     }
 
-    fn max_paths_per_invoke(&self, ctx: impl ReadContext) -> Result<u16, Error> {
-        Ok(Self::config(ctx.exchange()).max_paths_per_invoke)
+    fn max_paths_per_invoke(&self, _ctx: impl ReadContext) -> Result<u16, Error> {
+        Ok(self.config().max_paths_per_invoke)
     }
 
     fn configuration_version(&self, ctx: impl ReadContext) -> Result<u32, Error> {
         // Non-volatile, runtime-mutable. Lives in `BasicInfoSettings`,
         // bumped via `InteractionModel::bump_configuration_version`.
-        Self::with_settings(
-            ctx.exchange(),
-            |settings| Ok(settings.configuration_version),
-        )
+        self.with_settings(ctx.exchange_id(), |settings| {
+            Ok(settings.configuration_version)
+        })
     }
 
     // Deliberately outlined (`inline(never)`): inlining duplicates the
@@ -803,9 +269,9 @@ impl ClusterHandler for BasicInfoHandler {
         ctx: impl ReadContext,
         builder: NullableBuilder<P, LocationDescriptorStructBuilder<P>>,
     ) -> Result<P, Error> {
-        let config = Self::config(ctx.exchange());
+        let config = self.config();
 
-        Self::with_settings(ctx.exchange(), |settings| {
+        self.with_settings(ctx.exchange_id(), |settings| {
             // An admin-written value - including an explicitly-written `Null`
             // - takes precedence; until one exists, report the factory
             // default from `BasicInfoConfig`, falling back to `Null`.
@@ -832,7 +298,9 @@ impl ClusterHandler for BasicInfoHandler {
                 .non_null()?
                 .location_name(location_name)?
                 .floor_number(Nullable::new(floor_number))?
-                .area_type(Nullable::new(area_type))?
+                .area_type(Nullable::new(
+                    area_type.map(area_type_from_value).transpose()?,
+                ))?
                 .end()
         })
     }
@@ -847,7 +315,7 @@ impl ClusterHandler for BasicInfoHandler {
     ) -> Result<(), Error> {
         let mut persist = Persist::new(ctx.kv());
 
-        Self::with_settings(ctx.exchange(), |settings| {
+        self.with_settings(ctx.exchange_id(), |settings| {
             if let Some(value) = value.as_opt_ref() {
                 // Parse and validate everything up-front, so that a failed
                 // write leaves the stored value intact
@@ -857,7 +325,10 @@ impl ClusterHandler for BasicInfoHandler {
                 }
 
                 let floor_number = value.floor_number()?.into_option();
-                let area_type = value.area_type()?.into_option();
+                let area_type = value
+                    .area_type()?
+                    .into_option()
+                    .map(|area_type| area_type as u8);
 
                 // ... and then update the stored value in-place: going
                 // through an owned `DeviceLocation` temporary would move the
@@ -890,55 +361,54 @@ impl ClusterHandler for BasicInfoHandler {
 
     fn manufacturing_date<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        builder.set(Self::config(ctx.exchange()).manufacturing_date)
+        builder.set(self.config().manufacturing_date)
     }
 
     fn part_number<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        builder.set(Self::config(ctx.exchange()).part_number)
+        builder.set(self.config().part_number)
     }
 
     fn product_url<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        builder.set(Self::config(ctx.exchange()).product_url)
+        builder.set(self.config().product_url)
     }
 
     fn product_label<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        builder.set(Self::config(ctx.exchange()).product_label)
+        builder.set(self.config().product_label)
     }
 
     fn serial_number<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        builder.set(Self::config(ctx.exchange()).serial_no)
+        builder.set(self.config().serial_no)
     }
 
     fn local_config_disabled(&self, ctx: impl ReadContext) -> Result<bool, Error> {
-        Self::with_settings(
-            ctx.exchange(),
-            |settings| Ok(settings.local_config_disabled),
-        )
+        self.with_settings(ctx.exchange_id(), |settings| {
+            Ok(settings.local_config_disabled)
+        })
     }
 
     fn set_local_config_disabled(&self, ctx: impl WriteContext, value: bool) -> Result<(), Error> {
         let mut persist = Persist::new(ctx.kv());
 
-        Self::with_settings(ctx.exchange(), |settings| {
+        self.with_settings(ctx.exchange_id(), |settings| {
             settings.local_config_disabled = value;
 
             settings.store_persist(&mut persist)
@@ -949,131 +419,88 @@ impl ClusterHandler for BasicInfoHandler {
 
     fn unique_id<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        builder.set(Self::config(ctx.exchange()).unique_id)
+        builder.set(self.config().unique_id)
     }
 
     fn product_appearance<P: TLVBuilderParent>(
         &self,
-        ctx: impl ReadContext,
+        _ctx: impl ReadContext,
         builder: ProductAppearanceStructBuilder<P>,
     ) -> Result<P, Error> {
-        let appearance = Self::config(ctx.exchange()).product_appearance;
+        let appearance = self.config().product_appearance;
 
         builder
-            .finish(appearance.finish)?
-            .primary_color(Nullable::new(appearance.color))?
+            .finish(product_finish_to_cluster(appearance.finish))?
+            .primary_color(Nullable::new(
+                appearance.color.map(product_color_to_cluster),
+            ))?
             .end()
+    }
+}
+
+/// Convert a stored area type value to the `AreaTypeTag` enum
+fn area_type_from_value(value: u8) -> Result<AreaTypeTag, Error> {
+    // The generated enum converts from TLV only
+    let mut buf = [0; 2];
+    let mut wb = WriteBuf::new(&mut buf);
+    wb.u8(&TLVTag::Anonymous, value)?;
+
+    AreaTypeTag::from_tlv(&TLVElement::new(wb.as_slice()))
+}
+
+/// Convert a product finish of the node to the cluster's one
+fn product_finish_to_cluster(finish: ProductFinish) -> ProductFinishEnum {
+    match finish {
+        ProductFinish::Other => ProductFinishEnum::Other,
+        ProductFinish::Matte => ProductFinishEnum::Matte,
+        ProductFinish::Satin => ProductFinishEnum::Satin,
+        ProductFinish::Polished => ProductFinishEnum::Polished,
+        ProductFinish::Rugged => ProductFinishEnum::Rugged,
+        ProductFinish::Fabric => ProductFinishEnum::Fabric,
+    }
+}
+
+/// Convert a product color of the node to the cluster's one
+fn product_color_to_cluster(color: ProductColor) -> ColorEnum {
+    match color {
+        ProductColor::Black => ColorEnum::Black,
+        ProductColor::Navy => ColorEnum::Navy,
+        ProductColor::Green => ColorEnum::Green,
+        ProductColor::Teal => ColorEnum::Teal,
+        ProductColor::Maroon => ColorEnum::Maroon,
+        ProductColor::Purple => ColorEnum::Purple,
+        ProductColor::Olive => ColorEnum::Olive,
+        ProductColor::Gray => ColorEnum::Gray,
+        ProductColor::Blue => ColorEnum::Blue,
+        ProductColor::Lime => ColorEnum::Lime,
+        ProductColor::Aqua => ColorEnum::Aqua,
+        ProductColor::Red => ColorEnum::Red,
+        ProductColor::Fuchsia => ColorEnum::Fuchsia,
+        ProductColor::Yellow => ColorEnum::Yellow,
+        ProductColor::White => ColorEnum::White,
+        ProductColor::Nickel => ColorEnum::Nickel,
+        ProductColor::Chrome => ColorEnum::Chrome,
+        ProductColor::Brass => ColorEnum::Brass,
+        ProductColor::Copper => ColorEnum::Copper,
+        ProductColor::Silver => ColorEnum::Silver,
+        ProductColor::Gold => ColorEnum::Gold,
     }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::{BasicInfoSettings, DeviceLocation};
+    use super::{area_type_from_value, AreaTypeTag};
 
-    use crate::tlv::{Nullable, TLVElement, TLVTag, ToTLV};
-    use crate::utils::storage::WriteBuf;
-
-    /// Round-trip `settings` through the persisted-blob TLV representation.
-    fn round_trip(settings: &BasicInfoSettings) -> BasicInfoSettings {
-        let mut buf = [0; 512];
-        let mut wb = WriteBuf::new(&mut buf);
-        settings.to_tlv(&TLVTag::Anonymous, &mut wb).unwrap();
-
-        let mut loaded = BasicInfoSettings::new();
-        loaded.load(wb.as_slice()).unwrap();
-
-        loaded
-    }
-
-    /// An explicit `XX` ("unknown country") write must be stored - and
-    /// persisted - verbatim: `None` means "never configured" (and lets the
-    /// `Location` attribute report the `BasicInfoConfig::location` factory
-    /// default), which an explicit `XX` write is not.
     #[test]
-    fn explicit_xx_location_is_kept() {
-        let mut settings = BasicInfoSettings::new();
-        assert!(settings.location.is_none());
-
-        settings.set_location("XX");
-        assert_eq!(settings.location.as_deref(), Some("XX"));
-        assert_eq!(round_trip(&settings).location.as_deref(), Some("XX"));
-    }
-
-    /// The three `device_location` states - never-written / explicit `Null` /
-    /// value - must survive the persisted-blob round-trip, or an admin
-    /// -written `Null` would resurrect the factory default after a reboot.
-    #[test]
-    fn device_location_states_survive_persistence() {
-        let mut settings = BasicInfoSettings::new();
-        assert!(round_trip(&settings).device_location.is_none());
-
-        settings.device_location = Some(Nullable::none());
-        let loaded = round_trip(&settings);
-        assert!(matches!(&loaded.device_location, Some(l) if l.is_none()));
-
-        settings.device_location = Some(Nullable::some(DeviceLocation {
-            location_name: "Basement".try_into().unwrap(),
-            floor_number: Some(-1),
-            area_type: None,
-        }));
-        let loaded = round_trip(&settings);
-        let location = loaded.device_location.unwrap().into_option().unwrap();
-        assert_eq!(location.location_name, "Basement");
-        assert_eq!(location.floor_number, Some(-1));
-        assert_eq!(location.area_type, None);
-    }
-
-    /// Settings predating the `device_location` field (or a factory-fresh
-    /// blob) must load as "never written".
-    #[test]
-    fn missing_device_location_field_loads_as_unset() {
-        // A blob serialized without the trailing `device_location` field:
-        // emulate by truncating... simpler - serialize a fresh settings
-        // (which encodes the field as absent) and check the tri-state.
-        let settings = BasicInfoSettings::new();
-        let loaded = round_trip(&settings);
-        assert!(loaded.device_location.is_none());
-
-        // And `reset()` returns every runtime-configured value to
-        // "never written", so the factory defaults apply again.
-        let mut settings = BasicInfoSettings::new();
-        settings.set_location("US");
-        settings.location_type = Some(super::RegulatoryLocationTypeEnum::Indoor);
-        settings.device_location = Some(Nullable::none());
-        settings.reset();
-        assert!(settings.location.is_none());
-        assert!(settings.location_type.is_none());
-        assert!(settings.device_location.is_none());
-    }
-
-    /// The `GeneralCommissioning::RecoveryIdentifier` value must survive the
-    /// persisted-blob round-trip (stable across reboots, per Matter Core Spec
-    /// 11.10.6.11), load as "never minted" from a blob that predates the field,
-    /// and be cleared by `reset()` so a factory reset regenerates it.
-    #[test]
-    fn recovery_identifier_survives_persistence_and_resets() {
-        // Factory-fresh (and blobs predating the field) load as "never minted".
-        let mut settings = BasicInfoSettings::new();
-        assert!(settings.recovery_identifier.is_none());
-        assert!(round_trip(&settings).recovery_identifier.is_none());
-
-        // A minted value round-trips verbatim.
-        settings.recovery_identifier = Some(0x1122_3344_5566_7788);
+    fn area_type_from_its_value() {
         assert_eq!(
-            round_trip(&settings).recovery_identifier,
-            Some(0x1122_3344_5566_7788)
+            area_type_from_value(AreaTypeTag::Kitchen as u8).unwrap(),
+            AreaTypeTag::Kitchen
         );
-
-        // Factory reset clears it so the next read mints a fresh one.
-        settings.reset();
-        assert!(settings.recovery_identifier.is_none());
+        assert!(area_type_from_value(u8::MAX).is_err());
     }
-
-    // Silence unused-import lint on no-test builds
-    #[allow(unused)]
-    fn _t(_: TLVElement) {}
 }

@@ -42,8 +42,8 @@ use core::cell::Cell;
 
 use crate::crypto::Crypto;
 use crate::dm::clusters::decl::time_synchronization::{
-    GranularityEnum, MissingTrustedTimeSource, TimeFailure, TimeSourceEnum,
-    TimeSynchronizationAttrReads as _, TimeSynchronizationAttrResponses as _,
+    GranularityEnum, MissingTrustedTimeSource, TimeFailure, TimeSynchronizationAttrReads as _,
+    TimeSynchronizationAttrResponses as _,
 };
 use crate::dm::endpoints::ROOT_ENDPOINT_ID;
 use crate::dm::{AttrChangeNotifier, EventEmitter};
@@ -54,6 +54,8 @@ use crate::transport::exchange::Exchange;
 use crate::utils::futures::{select, Either};
 use crate::utils::timers::{Duration, Instant, Timer};
 use crate::Matter;
+
+use super::{granularity_from_cluster, TimeSource};
 
 /// How soon [`TimeSyncClient::run`] first retries a refresh getting no time;
 /// each further retry waits twice as long.
@@ -285,8 +287,8 @@ impl<'a, C: Crypto> TimeSyncClient<'a, C> {
             self.matter.with_state(|state| {
                 state.rtc.set_utc_time_persist(
                     utc_us,
-                    granularity,
-                    TimeSourceEnum::NodeTimeCluster,
+                    granularity_from_cluster(granularity),
+                    TimeSource::NodeTimeCluster,
                     &mut persist,
                     notify,
                 )

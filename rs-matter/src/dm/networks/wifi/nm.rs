@@ -36,10 +36,10 @@ use crate::dm::clusters::net_comm::{
     WirelessCreds,
 };
 use crate::dm::clusters::wifi_diag::{SecurityTypeEnum, WiFiVersionEnum, WifiDiag, WirelessDiag};
+use crate::dm::networks::wifi::wpa_supp::band::{band_and_channel, signal_strength_to_rssi};
 use crate::dm::networks::NetChangeNotif;
 use crate::error::{Error, ErrorCode};
 use crate::tlv::Nullable;
-use crate::transport::network::wifi::wpa_supp::band::{band_and_channel, signal_strength_to_rssi};
 use crate::utils::futures::{select, select3, Either, Either3};
 use crate::utils::storage;
 use crate::utils::sync::{blocking, IfMultiMutex, MaybeSend};

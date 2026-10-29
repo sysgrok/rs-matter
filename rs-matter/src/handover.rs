@@ -22,11 +22,11 @@ use core::fmt::{self, Debug};
 use core::marker::PhantomData;
 
 use crate::acl::AclEntry;
+use crate::basic_info::RegulatoryLocationType;
 use crate::crypto::{CanonAeadKey, CanonPkcSecretKey};
-use crate::dm::clusters::decl::general_commissioning::RegulatoryLocationTypeEnum;
-use crate::dm::clusters::net_comm::{Networks, NetworksError, WirelessCreds};
 use crate::error::{Error, ErrorCode};
 use crate::fabric::Fabric;
+use crate::networks::{Networks, NetworksError, WirelessCreds};
 use crate::tlv::{
     EitherIter, FromTLV, OctetStr, Octets, TLVArray, TLVArrayOrSlice, TLVElement, TLVTag, TLVWrite,
     ToTLV, Utf8Str, TLV,
@@ -269,7 +269,7 @@ impl<T> defmt::Format for HandoverNetworks<'_, T> {
 pub struct HandoverRegulatory<'a> {
     /// Two-letter ISO 3166-1 country code.
     pub country_code: Utf8Str<'a>,
-    pub location_type: RegulatoryLocationTypeEnum,
+    pub location_type: RegulatoryLocationType,
 }
 
 /// The commissioning handover envelope.
@@ -475,7 +475,7 @@ mod tests {
             thread_networks: HandoverNetworks::from_slice(&thread),
             regulatory: Some(HandoverRegulatory {
                 country_code: "BG",
-                location_type: RegulatoryLocationTypeEnum::IndoorOutdoor,
+                location_type: RegulatoryLocationType::IndoorOutdoor,
             }),
             fail_safe_remaining_secs: 42,
             breadcrumb: 7,

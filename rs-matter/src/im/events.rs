@@ -18,22 +18,21 @@
 use core::fmt::Debug;
 
 use crate::acl::Accessor;
-use crate::dm::{ClusterId, EndptId, EventId, Node};
+use crate::dm::{ClusterId, DynEventWriter, EndptId, EventId, EventTLVWrite, Node};
 use crate::error::{Error, ErrorCode};
+use crate::im::access::NodeAccess as _;
 use crate::im::{
     EventData, EventDataTag, EventDataTimestamp, EventFilter, EventNumber, EventPath,
     EventPriority, EventResp, EventRespTag,
 };
 use crate::persist::{load_logged, KvBlobStore, KvBlobStoreAccess, Persist, EVENT_EPOCH_KEY};
 use crate::tlv::{
-    FromTLV, TLVArray, TLVBuilderParent, TLVElement, TLVSequence, TLVSequenceIter, TLVTag,
-    TLVWrite, TagType, ToTLV,
+    FromTLV, TLVArray, TLVElement, TLVSequence, TLVSequenceIter, TLVTag, TLVWrite, TagType, ToTLV,
 };
 use crate::utils::cell::RefCell;
 use crate::utils::init::{init, Init};
 use crate::utils::storage::WriteBuf;
 use crate::utils::sync::blocking::Mutex;
-use crate::utils::sync::MaybeSendSync;
 use crate::utils::timers::Instant;
 
 /// The default size of each event buffer in bytes.
@@ -468,7 +467,7 @@ impl<'a, const N: usize> EventWriter<'a, N> {
     /// which handles writing TLV data and rolling back on errors by rewinding the write head to the position before the write started.
     #[inline(always)]
     fn tw(&mut self) -> EventTLVWrite<'_> {
-        EventTLVWrite(self)
+        EventTLVWrite::new(self)
     }
 
     /// Write a byte to the current buffer, evicting and promoting events as needed to make space for the new byte.
@@ -546,16 +545,6 @@ impl<'a, const N: usize> EventWriter<'a, N> {
     }
 }
 
-/// A dyn-compatible writer for event data
-/// Necessary so that we can implement `EventTLVWrite`, which is a `TLVWrite` with an erased `const N: usize` generic
-trait DynEventWriter: MaybeSendSync {
-    fn write(&mut self, byte: u8) -> Result<(), Error>;
-
-    fn get_tail(&self) -> usize;
-
-    fn rewind_to(&mut self, pos: usize);
-}
-
 impl<'a, const N: usize> DynEventWriter for EventWriter<'a, N> {
     fn write(&mut self, byte: u8) -> Result<(), Error> {
         EventWriter::write(self, byte)
@@ -570,51 +559,7 @@ impl<'a, const N: usize> DynEventWriter for EventWriter<'a, N> {
     }
 }
 
-/// A `TLVWrite` wrapper around EventWriter that erases the const generic,
-/// allowing it to be used in the closure passed to `Events::push()` and the various `emit_event` handler context methods.
-pub struct EventTLVWrite<'a>(&'a mut dyn DynEventWriter);
-
-impl core::fmt::Debug for EventTLVWrite<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("EventTLVWrite").finish()
-    }
-}
-
-#[cfg(feature = "defmt")]
-impl defmt::Format for EventTLVWrite<'_> {
-    fn format(&self, fmt: defmt::Formatter) {
-        defmt::write!(fmt, "EventTLVWrite")
-    }
-}
-
-impl TLVWrite for EventTLVWrite<'_> {
-    type Position = usize;
-
-    fn write(&mut self, byte: u8) -> Result<(), Error> {
-        self.0.write(byte)
-    }
-
-    fn get_tail(&self) -> Self::Position {
-        self.0.get_tail()
-    }
-
-    fn rewind_to(&mut self, pos: Self::Position) {
-        self.0.rewind_to(pos)
-    }
-}
-
-impl TLVBuilderParent for EventTLVWrite<'_> {
-    type Write = Self;
-
-    fn writer(&mut self) -> &mut Self::Write {
-        self
-    }
-}
-
 const EVENT_TAG: TLVTag = TLVTag::Context(EventRespTag::Data as _);
-
-/// The context tag corresponding to the event data field in the Event Response TLV structure.
-pub const EVENT_DATA_TAG: TLVTag = TLVTag::Context(EventDataTag::Data as _);
 
 /// Stores one "priority level" of events, see the doc string on EventsInner for more info on that.
 ///
@@ -918,6 +863,7 @@ mod tests {
     use crate::utils::storage::Vec;
 
     use super::*;
+    use crate::dm::EVENT_DATA_TAG;
 
     #[test]
     fn one_entry() {

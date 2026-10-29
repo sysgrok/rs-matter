@@ -17,10 +17,11 @@
 
 use core::num::NonZeroU8;
 
+use crate::dm::{DeviceLoad, IMBuffer};
 #[cfg(feature = "persistent-subscriptions")]
 use crate::error::Error;
 use crate::fabric::MAX_FABRICS;
-use crate::im::{AttrId, ClusterId, DeviceLoad, EndptId, EventId, EventNumber, IMBuffer, NodeId};
+use crate::im::{AttrId, ClusterId, EndptId, EventId, EventNumber, NodeId};
 #[cfg(feature = "persistent-subscriptions")]
 use crate::persist::{load_logged, KvBlobStore, PERSISTENT_SUBSCRIPTIONS_START};
 #[cfg(feature = "persistent-subscriptions")]

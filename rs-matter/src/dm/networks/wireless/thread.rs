@@ -27,6 +27,8 @@ use crate::utils::storage::Vec;
 
 use super::{WirelessNetwork, WirelessNetworks};
 
+pub use crate::networks::ThreadTLV;
+
 pub type ThreadNetworks<const N: usize> = WirelessNetworks<N, Thread>;
 
 /// A struct implementing the `WirelessNetwork` trait for Thread networks.
@@ -129,83 +131,5 @@ impl WirelessNetwork for Thread {
         WirelessCreds::Thread {
             dataset_tlv: &self.dataset.vec,
         }
-    }
-}
-
-/// A simple Thread TLV reader
-#[derive(Debug, Copy, Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct ThreadTLV<'a>(&'a [u8]);
-
-impl<'a> ThreadTLV<'a> {
-    /// Create a new `ThreadTLV` instance with the given TLV data
-    pub const fn new(tlv: &'a [u8]) -> Self {
-        Self(tlv)
-    }
-
-    /// Get the Extended PAN ID from the operational dataset
-    pub fn ext_pan_id(&mut self) -> Result<&'a [u8], Error> {
-        const EXT_PAN_ID: u8 = 2;
-
-        let ext_pan_id =
-            self.find_map(|(tlv_type, tlv_value)| (tlv_type == EXT_PAN_ID).then_some(tlv_value));
-
-        let Some(ext_pan_id) = ext_pan_id else {
-            return Err(ErrorCode::InvalidData.into());
-        };
-
-        Ok(ext_pan_id)
-    }
-
-    /// Get the next TLV from the data
-    ///
-    /// Returns `Some` with the TLV type and value if there is a TLV available,
-    /// otherwise returns `None`.
-    pub fn next_tlv(&mut self) -> Option<(u8, &'a [u8])> {
-        const LONG_VALUE_ID: u8 = 255;
-
-        // Adopted from here:
-        // https://github.com/openthread/openthread/blob/main/tools/tcat_ble_client/tlv/tlv.py
-
-        let mut slice = self.0;
-
-        (slice.len() >= 2).then_some(())?;
-
-        let tlv_type = slice[0];
-        slice = &slice[1..];
-
-        let tlv_len_size = if slice[0] == LONG_VALUE_ID {
-            slice = &slice[1..];
-            3
-        } else {
-            1
-        };
-
-        (slice.len() >= tlv_len_size).then_some(())?;
-
-        let tlv_len = if tlv_len_size == 1 {
-            slice[0] as usize
-        } else {
-            u32::from_be_bytes([0, slice[0], slice[1], slice[2]]) as usize
-        };
-
-        slice = &slice[tlv_len_size..];
-        (slice.len() >= tlv_len).then_some(())?;
-
-        let tlv_value = &slice[..tlv_len];
-
-        slice = &slice[tlv_len..];
-
-        self.0 = slice;
-
-        Some((tlv_type, tlv_value))
-    }
-}
-
-impl<'a> Iterator for ThreadTLV<'a> {
-    type Item = (u8, &'a [u8]);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_tlv()
     }
 }

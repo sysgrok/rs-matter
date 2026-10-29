@@ -26,8 +26,10 @@ use crate::utils::timers::{Duration, Timer};
 pub mod eth;
 #[cfg(feature = "os")]
 pub mod generic;
+pub mod thread;
 #[cfg(all(unix, feature = "os", not(target_os = "espidf")))]
 pub mod unix;
+pub mod wifi;
 pub mod wireless;
 
 #[cfg(all(feature = "os", not(all(unix, not(target_os = "espidf")))))]

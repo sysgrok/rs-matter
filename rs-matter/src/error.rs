@@ -20,7 +20,8 @@ use core::{array::TryFromSliceError, fmt, str::Utf8Error};
 #[cfg(all(feature = "alloc", feature = "backtrace"))]
 use alloc::{boxed::Box, string::ToString};
 
-use crate::utils::io;
+// Not through `utils::io`, as `error` is to be a crate below `utils`
+use embedded_io_async as io;
 
 // TODO: The error code enum is in a need of an overhaul
 //
@@ -455,7 +456,7 @@ mod tests {
 
     #[test]
     fn embedded_io_error_kind_is_other() {
-        use crate::utils::io::{Error as _, ErrorKind};
+        use embedded_io_async::{Error as _, ErrorKind};
 
         assert_eq!(Error::new(ErrorCode::NoSpace).kind(), ErrorKind::Other);
     }

@@ -17,7 +17,7 @@
 
 use core::iter::{empty, once};
 
-use crate::dm::clusters::basic_info::BasicInfoConfig;
+use crate::basic_info::BasicInfoConfig;
 use crate::transport::network::mdns::CommissionableFilter;
 
 use super::{GATT_HEADER_SIZE, MAX_BTP_SEGMENT_SIZE};

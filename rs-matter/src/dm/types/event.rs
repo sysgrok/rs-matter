@@ -17,7 +17,15 @@
 
 use core::fmt;
 
+use crate::error::Error;
+use crate::im::encoding::EventDataTag;
+use crate::tlv::{TLVBuilderParent, TLVTag, TLVWrite};
+use crate::utils::sync::MaybeSendSync;
+
 use super::{Access, EventId};
+
+/// The context tag corresponding to the event data field in the Event Response TLV structure.
+pub const EVENT_DATA_TAG: TLVTag = TLVTag::Context(EventDataTag::Data as _);
 
 /// A type modeling the event meta-data in the Matter data model.
 #[derive(Debug, Clone)]
@@ -66,4 +74,65 @@ macro_rules! event_enum {
             }
         }
     };
+}
+
+/// A dyn-compatible writer for event data
+/// Necessary so that we can implement `EventTLVWrite`, which is a `TLVWrite` with an erased `const N: usize` generic
+pub trait DynEventWriter: MaybeSendSync {
+    /// Write a byte.
+    fn write(&mut self, byte: u8) -> Result<(), Error>;
+
+    /// The position after the last written byte.
+    fn get_tail(&self) -> usize;
+
+    /// Drop the bytes written after `pos`.
+    fn rewind_to(&mut self, pos: usize);
+}
+
+/// A `TLVWrite` wrapper around EventWriter that erases the const generic,
+/// allowing it to be used in the closure passed to `Events::push()` and the various `emit_event` handler context methods.
+pub struct EventTLVWrite<'a>(&'a mut dyn DynEventWriter);
+
+impl<'a> EventTLVWrite<'a> {
+    /// Create a new instance writing into `writer`.
+    pub fn new(writer: &'a mut dyn DynEventWriter) -> Self {
+        Self(writer)
+    }
+}
+
+impl core::fmt::Debug for EventTLVWrite<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("EventTLVWrite").finish()
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for EventTLVWrite<'_> {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "EventTLVWrite")
+    }
+}
+
+impl TLVWrite for EventTLVWrite<'_> {
+    type Position = usize;
+
+    fn write(&mut self, byte: u8) -> Result<(), Error> {
+        self.0.write(byte)
+    }
+
+    fn get_tail(&self) -> Self::Position {
+        self.0.get_tail()
+    }
+
+    fn rewind_to(&mut self, pos: Self::Position) {
+        self.0.rewind_to(pos)
+    }
+}
+
+impl TLVBuilderParent for EventTLVWrite<'_> {
+    type Write = Self;
+
+    fn writer(&mut self) -> &mut Self::Write {
+        self
+    }
 }

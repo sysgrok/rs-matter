@@ -424,7 +424,7 @@ mod tests {
     use crate::{
         cert::{MAX_CERT_TLV_AND_ASN1_LEN, MAX_CERT_TLV_LEN},
         crypto::{test_only_crypto, CanonPkcPublicKey, PublicKey, SigningSecretKey},
-        dm::clusters::time_sync::UtcTime,
+        utils::epoch::UtcTime,
     };
 
     use super::*;

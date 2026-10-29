@@ -38,6 +38,7 @@ use crate::sc::{
 };
 use crate::tlv::{get_root_node_struct, FromTLV, OctetStr, TLVElement, TLVTag, TLVWrite, ToTLV};
 use crate::transport::exchange::Exchange;
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::session::{NocCatIds, PeerMrpParams, ReservedSession, SessionMode};
 use crate::utils::init::InitMaybeUninit;
 use crate::utils::storage::ReadBuf;

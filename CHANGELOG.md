@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+* Breaking: node types that lived in cluster handler modules moved to modules of their own and use their own enums instead of the generated ones; the handler modules re-export them
+  * `basic_info`: `BasicInfoConfig`, `BasicInfoSettings` and their parts, with new `ProductFinish`, `ProductColor` and `RegulatoryLocationType`; the area type of `DeviceLocation` and `DeviceLocationConfig` is its `u8` value
+  * `rtc`: `Rtc` and `TrustedTimeSource`, with new `TimeGranularity` and `TimeSource`
+  * `networks`: `Networks`, `NetworksError`, `WirelessCreds`, `DummyNetworks`, `ThreadTLV` and the functions that load, store and remove networks; `WirelessCreds::check_match` is now `NetworkType::check_creds`
+  * `icd`: `IcdAdvertisement`, with a new `IcdOperatingMode`; `groupcast`: the Groupcast testing types
+  * `Matter::boot_reason` and `Matter::set_boot_reason` use a new `BootReason`, and the group table a new `fabric::MulticastAddrPolicy`
+  * `AclEntry` has its own `AuxiliaryType` and no longer converts from and to the generated `AccessControlEntryStruct`, which the ACL handler does now
+* Breaking: the Linux Wi-Fi and Thread drivers moved from `transport::network::{wifi, thread}` to `dm::networks::{wifi, thread}`
+* Breaking: `EventTLVWrite`, `IMBuffer`, `ImStats` and `DeviceLoad` moved to `dm`
+* Breaking: the handler contexts no longer hand out the `Matter` instance and the `Exchange`: `HandlerContext::matter()`, `OperationContext::exchange()` and `OperationContext::accessor()` are replaced by `HandlerContext::utc_time()` and `OperationContext::exchange_id()`
+  * Breaking: the system cluster handlers take a `&Matter` when created, and so do `root_handler`, the `*_net_handler` and `*_sys_handler` functions and the `build` of the `*SysHandlerBuilder`s
+  * Breaking: `ScenesHandler` takes a `&dyn GroupMembership` (which `Matter` implements)
+  * Breaking: `ExchangeId` lives in `dm` (and is re-exported from `transport::exchange`); its methods that look up the session are in the `ExchangeIdExt` trait
+  * Breaking: `ReportDataHandler`, `ReportContext` and `SubscriptionCtx` moved from `dm` to `im`, and `UtcTime` from `dm::clusters::time_sync` to `utils::epoch`
+  * New: `Accessor::for_operation`
+* New: the generated cluster clients (`<Cluster>Client`, `<Cluster>ClientView` and the response handles) work over any `im::ImTransaction`, which `Exchange` implements, rather than over `Exchange` only
+  * Breaking: these types take the transaction (or the response chunk) as a type parameter instead of a lifetime, e.g. `OnOffClientView<Exchange<'a>>`
 * Breaking: the MSRV is 1.92
 * New: `utils::futures`, `utils::timers`, `utils::io` and `utils::storage::String`, which re-export what `rs-matter` uses from `embassy-futures`, `embassy-time`, `embedded-io-async` and `heapless`
   * Breaking: `utils::select` is renamed to `utils::futures`

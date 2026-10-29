@@ -17,14 +17,17 @@
 
 use core::fmt;
 
-use crate::acl::Accessor;
-use crate::dm::endpoints::ROOT_ENDPOINT_ID;
-use crate::dm::{Cluster, Endpoint, Metadata};
-use crate::im::encoding::{AttrPath, EventPath, GenericPath, IMStatusCode};
+use crate::dm::ROOT_ENDPOINT_ID;
+use crate::dm::{Endpoint, Metadata};
 use crate::utils::init::{init, Init};
 use crate::utils::storage::Vec;
 
-use super::{EndptId, NodeId};
+use super::{ClusterId, EndptId};
+
+/// The ID of the Access Control cluster.
+const ACCESS_CONTROL_CLUSTER_ID: ClusterId = 0x001F;
+/// The `AUXILIARY` feature bit of the Access Control cluster.
+const ACCESS_CONTROL_FEATURE_AUXILIARY: u32 = 0x04;
 
 /// The main Matter metadata type describing a Matter Node.
 ///
@@ -62,157 +65,14 @@ impl<'a> Node<'a> {
         self.endpoints.iter().find(|endpoint| endpoint.id == id)
     }
 
-    pub(crate) fn validate_attr_path(
-        &self,
-        path: &AttrPath,
-        timed: bool,
-        write: bool,
-        accessor: &Accessor<'_>,
-    ) -> Result<(), IMStatusCode> {
-        if let Some(node_id) = path.node {
-            self.validate_node_id(node_id, accessor)?;
-        }
-
-        let gp = path.to_gp();
-
-        let Some((endpoint, cluster, attr_id)) = self.validate_cluster_path(&gp)? else {
-            return Ok(());
-        };
-
-        let Some(attr) = cluster.attribute(attr_id) else {
-            return Err(IMStatusCode::UnsupportedAttribute);
-        };
-
-        cluster.check_attr_access(accessor, timed, gp, endpoint.device_types, write, attr.id)
-    }
-
-    pub(crate) fn validate_event_path(
-        &self,
-        path: &EventPath,
-        accessor: &Accessor<'_>,
-    ) -> Result<(), IMStatusCode> {
-        if let Some(node_id) = path.node {
-            self.validate_node_id(node_id, accessor)?;
-        }
-
-        let gp = path.to_gp();
-
-        let Some((endpoint, cluster, event_id)) = self.validate_cluster_path(&gp)? else {
-            return Ok(());
-        };
-
-        let Some(event) = cluster.event(event_id) else {
-            return Err(IMStatusCode::UnsupportedEvent);
-        };
-
-        cluster.check_event_access(accessor, gp, endpoint.device_types, event.id)
-    }
-
-    fn validate_cluster_path(
-        &self,
-        path: &GenericPath,
-    ) -> Result<Option<(&Endpoint<'_>, &Cluster<'_>, u32)>, IMStatusCode> {
-        let Some(endpoint_id) = path.endpoint else {
-            return Ok(None);
-        };
-
-        let Some(endpoint) = self.endpoint(endpoint_id) else {
-            // Endpoint does not exist
-            return Err(IMStatusCode::UnsupportedEndpoint);
-        };
-
-        let Some(cluster_id) = path.cluster else {
-            return Ok(None);
-        };
-
-        let Some(cluster) = endpoint.cluster(cluster_id) else {
-            // Cluster does not exist on this endpoint
-            return Err(IMStatusCode::UnsupportedCluster);
-        };
-
-        let Some(leaf_id) = path.leaf else {
-            return Ok(None);
-        };
-
-        Ok(Some((endpoint, cluster, leaf_id)))
-    }
-
-    fn validate_node_id(
-        &self,
-        node_id: NodeId,
-        accessor: &Accessor<'_>,
-    ) -> Result<(), IMStatusCode> {
-        let Some(accessor_node_id) = accessor.node_id() else {
-            return Err(IMStatusCode::UnsupportedNode);
-        };
-
-        if node_id != accessor_node_id {
-            return Err(IMStatusCode::UnsupportedNode);
-        }
-
-        Ok(())
-    }
-
-    /// Return `true` if at least one attribute matching the (potentially wildcard) path
-    /// is accessible to the given accessor. Used for subscription validation.
-    pub(crate) fn has_accessible_attr(&self, path: &AttrPath, accessor: &Accessor<'_>) -> bool {
-        for endpoint in self.endpoints.iter() {
-            if let Some(ep_id) = path.endpoint {
-                if endpoint.id != ep_id {
-                    continue;
-                }
-            }
-
-            for cluster in endpoint.clusters.iter() {
-                if let Some(cluster_id) = path.cluster {
-                    if cluster.id != cluster_id {
-                        continue;
-                    }
-                }
-
-                for attr in cluster.attributes.iter() {
-                    if let Some(attr_id) = path.attr {
-                        if attr.id != attr_id {
-                            continue;
-                        }
-                    }
-
-                    let gp = GenericPath::new(Some(endpoint.id), Some(cluster.id), Some(attr.id));
-
-                    if cluster
-                        .check_attr_access(
-                            accessor,
-                            false,
-                            gp,
-                            endpoint.device_types,
-                            false,
-                            attr.id,
-                        )
-                        .is_ok()
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
     /// Return true if the node metadata advertises the `AUXILIARY` feature, which
     /// indicates that the node has a feature (e.g. a Groupcast cluster) that
     /// synthesizes auxiliary ACL entries and requires the special access-control
     /// behavior mandated by the Matter Core spec for nodes with the feature.
     pub(crate) fn aux_acl_enabled(&self) -> bool {
         self.endpoint(ROOT_ENDPOINT_ID)
-            .and_then(|endpoint| {
-                endpoint.cluster(crate::dm::clusters::decl::access_control::FULL_CLUSTER.id)
-            })
-            .is_some_and(|cluster| {
-                cluster.feature_map
-                    & crate::dm::clusters::decl::access_control::Feature::AUXILIARY.bits()
-                    != 0
-            })
+            .and_then(|endpoint| endpoint.cluster(ACCESS_CONTROL_CLUSTER_ID))
+            .is_some_and(|cluster| cluster.feature_map & ACCESS_CONTROL_FEATURE_AUXILIARY != 0)
     }
 }
 

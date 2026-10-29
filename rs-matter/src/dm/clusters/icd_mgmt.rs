@@ -46,8 +46,8 @@ use core::future::Future;
 use core::pin::pin;
 
 use crate::dm::HandlerContext;
+use crate::dm::ImStats;
 use crate::error::Error;
-use crate::im::ImStats;
 use crate::utils::cell::RefCell;
 use crate::utils::futures::{select, select4, Either, Either4};
 use crate::utils::init::{init, Init};
@@ -55,6 +55,8 @@ use crate::utils::sync::blocking::Mutex;
 use crate::utils::sync::Notification;
 use crate::utils::timers::{Duration, Instant, Timer};
 use crate::Matter;
+
+pub use crate::icd::{IcdAdvertisement, IcdOperatingMode};
 
 pub use crate::dm::clusters::decl::icd_management::*;
 
@@ -115,33 +117,6 @@ pub struct IcdNetParams {
     /// milliseconds. Drivers size their link keep-alives (e.g. the Thread
     /// child timeout) from it.
     pub max_poll_interval_ms: u32,
-}
-
-/// What an ICD advertises about itself, over DNS-SD and in the session
-/// parameters of its CASE / PASE handshakes - and what its subscriptions are
-/// paced by.
-///
-/// The ICD Management handler keeps [`Matter`](crate::Matter) supplied with it
-/// (see [`Matter::icd_advertisement`](crate::Matter::icd_advertisement)); a node
-/// that is not an ICD advertises none.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct IcdAdvertisement {
-    /// The `ActiveModeThreshold`, in milliseconds: the advertised
-    /// `SESSION_ACTIVE_THRESHOLD` (`SAT` TXT key).
-    pub active_threshold_ms: u16,
-    /// The slow polling interval in effect, in milliseconds: what the device is
-    /// reachable within while idle, so the least `SESSION_IDLE_INTERVAL`
-    /// (`SII` TXT key) it may advertise.
-    pub slow_poll_ms: u32,
-    /// The current operating mode of a Long-Idle-Time-capable ICD: the `ICD`
-    /// TXT key (`0` for `SIT`, `1` for `LIT`). `None` for a SIT-only ICD, which
-    /// has no `ICD` key.
-    pub operating_mode: Option<OperatingModeEnum>,
-    /// The idle mode duration, in seconds. Subscriptions to the device pick
-    /// their max interval from it, so that their reports wake the device no
-    /// more often than idle mode ends anyway.
-    pub idle_mode_duration_s: u32,
 }
 
 /// The timing parameters an ICD advertises through the cluster's mandatory
@@ -296,21 +271,33 @@ trait CheckIns {
 
     /// Send a Check-In to every registered client that has lost touch with
     /// the device.
-    fn send_check_ins(&self, ctx: impl HandlerContext) -> impl Future<Output = Result<(), Error>>;
+    fn send_check_ins(
+        &self,
+        matter: &Matter<'_>,
+        ctx: impl HandlerContext,
+    ) -> impl Future<Output = Result<(), Error>>;
 }
 
 impl<T: CheckIns> CheckIns for &T {
     const LIT: bool = T::LIT;
 
-    fn send_check_ins(&self, ctx: impl HandlerContext) -> impl Future<Output = Result<(), Error>> {
-        T::send_check_ins(self, ctx)
+    fn send_check_ins(
+        &self,
+        matter: &Matter<'_>,
+        ctx: impl HandlerContext,
+    ) -> impl Future<Output = Result<(), Error>> {
+        T::send_check_ins(self, matter, ctx)
     }
 }
 
 impl CheckIns for () {
     const LIT: bool = false;
 
-    fn send_check_ins(&self, _ctx: impl HandlerContext) -> impl Future<Output = Result<(), Error>> {
+    fn send_check_ins(
+        &self,
+        _matter: &Matter<'_>,
+        _ctx: impl HandlerContext,
+    ) -> impl Future<Output = Result<(), Error>> {
         core::future::ready(Ok(()))
     }
 }
@@ -437,7 +424,10 @@ impl Icd {
         IcdAdvertisement {
             active_threshold_ms: self.mode.active_mode_threshold_ms,
             slow_poll_ms,
-            operating_mode: lit.then_some(operating_mode),
+            operating_mode: lit.then_some(match operating_mode {
+                OperatingModeEnum::SIT => IcdOperatingMode::Sit,
+                OperatingModeEnum::LIT => IcdOperatingMode::Lit,
+            }),
             idle_mode_duration_s: self.mode.idle_mode_duration_s,
         }
     }
@@ -684,8 +674,12 @@ impl Icd {
     /// - sends them as well as soon as a report to a subscriber fails while the
     ///   device is active: that client may have lost its subscription, and is
     ///   better nudged now than on the next wake-up.
-    async fn run<X: CheckIns>(&self, ctx: impl HandlerContext, check_ins: X) -> Result<(), Error> {
-        let matter = ctx.matter();
+    async fn run<X: CheckIns>(
+        &self,
+        matter: &Matter<'_>,
+        ctx: impl HandlerContext,
+        check_ins: X,
+    ) -> Result<(), Error> {
         let transport = matter.transport();
 
         let dev_det = matter.dev_det();
@@ -731,7 +725,7 @@ impl Icd {
             }
         });
 
-        let mut duty = pin!(self.run_power_mode(&ctx, check_ins));
+        let mut duty = pin!(self.run_power_mode(matter, &ctx, check_ins));
 
         match select4(&mut activity, &mut comm_window, &mut network, &mut duty).await {
             Either4::Fourth(result) => result,
@@ -742,10 +736,10 @@ impl Icd {
     /// The idle <-> active loop.
     async fn run_power_mode<X: CheckIns>(
         &self,
+        matter: &Matter<'_>,
         ctx: impl HandlerContext,
         check_ins: X,
     ) -> Result<(), Error> {
-        let matter = ctx.matter();
         let stats = ctx.im_stats();
 
         // Work in flight that keeps the device active past its deadline, as the
@@ -756,7 +750,7 @@ impl Icd {
 
         // A LIT that (re)starts is waking up from its sleep, as far as its
         // clients are concerned.
-        check_ins.send_check_ins(&ctx).await?;
+        check_ins.send_check_ins(matter, &ctx).await?;
 
         loop {
             match self.power_mode() {
@@ -774,13 +768,13 @@ impl Icd {
                     .await
                     {
                         self.request_active();
-                        check_ins.send_check_ins(&ctx).await?;
+                        check_ins.send_check_ins(matter, &ctx).await?;
                     }
                 }
                 IcdPowerMode::Active => self.run_active(&busy, || stats.next_keep_alive_at()).await,
                 IcdPowerMode::Idle => {
                     if self.run_idle().await {
-                        check_ins.send_check_ins(&ctx).await?;
+                        check_ins.send_check_ins(matter, &ctx).await?;
                     }
                 }
             }
@@ -1147,7 +1141,7 @@ mod tests {
             IcdAdvertisement {
                 active_threshold_ms: mode().active_mode_threshold_ms,
                 slow_poll_ms: 5_000,
-                operating_mode: Some(OperatingModeEnum::SIT),
+                operating_mode: Some(IcdOperatingMode::Sit),
                 idle_mode_duration_s: mode().idle_mode_duration_s,
             }
         );
@@ -1159,7 +1153,7 @@ mod tests {
             IcdAdvertisement {
                 active_threshold_ms: mode().active_mode_threshold_ms,
                 slow_poll_ms: 900_000,
-                operating_mode: Some(OperatingModeEnum::LIT),
+                operating_mode: Some(IcdOperatingMode::Lit),
                 idle_mode_duration_s: mode().idle_mode_duration_s,
             }
         );

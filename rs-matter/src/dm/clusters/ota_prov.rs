@@ -46,11 +46,12 @@ use crate::dm::{Cluster, Dataver, InvokeContext, NodeId};
 use crate::error::{Error, ErrorCode};
 use crate::ota::MAX_SOFTWARE_VERSION_STR_LEN;
 use crate::tlv::{Octets, TLVBuilderParent};
+use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::exchange::MAX_EXCHANGE_RX_BUF_SIZE;
 use crate::utils::storage::pooled::Buffers;
 use crate::utils::storage::{String, Vec};
 use crate::utils::sync::{MaybeSend, MaybeSendSync};
-use crate::with;
+use crate::{with, Matter};
 
 /// The buffer an [`OtaBdxHandler`] stages each BDX block in.
 ///
@@ -312,15 +313,32 @@ where
 const UPDATE_TOKEN_LEN: core::ops::RangeInclusive<usize> = 8..=32;
 
 /// The server-side handler for the OTA Software Update Provider cluster.
-pub struct OtaProviderHandler<I> {
+pub struct OtaProviderHandler<'a, I> {
     dataver: Dataver,
+    matter: &'a Matter<'a>,
     images: I,
 }
 
-impl<I> OtaProviderHandler<I> {
-    /// Create a new handler backed by the given image registry.
-    pub const fn new(dataver: Dataver, images: I) -> Self {
-        Self { dataver, images }
+impl<'a, I> OtaProviderHandler<'a, I> {
+    /// Create a new handler backed by the given image registry, serving the
+    /// images from `matter`.
+    pub const fn new(dataver: Dataver, matter: &'a Matter<'a>, images: I) -> Self {
+        Self {
+            dataver,
+            matter,
+            images,
+        }
+    }
+
+    /// The requestor invoking a command: the accessing fabric and the peer node.
+    fn requestor(&self, ctx: impl InvokeContext) -> Result<OtaRequestorId, Error> {
+        let fab_idx = NonZeroU8::new(ctx.cmd().fab_idx).ok_or(ErrorCode::Invalid)?;
+        let node_id = ctx
+            .exchange_id()
+            .peer_node_id(self.matter)?
+            .ok_or(ErrorCode::Invalid)?;
+
+        Ok(OtaRequestorId { fab_idx, node_id })
     }
 
     /// Adapt this handler to the generic `rs-matter` `AsyncHandler` trait.
@@ -329,7 +347,7 @@ impl<I> OtaProviderHandler<I> {
     }
 }
 
-impl<I: OtaImagesRegistry> ClusterAsyncHandler for OtaProviderHandler<I> {
+impl<I: OtaImagesRegistry> ClusterAsyncHandler for OtaProviderHandler<'_, I> {
     const CLUSTER: Cluster<'static> = FULL_CLUSTER.with_attrs(with!(required));
 
     fn dataver(&self) -> u32 {
@@ -352,7 +370,7 @@ impl<I: OtaImagesRegistry> ClusterAsyncHandler for OtaProviderHandler<I> {
         // Absent means the requestor cannot obtain user consent on its own.
         let requestor_can_consent = request.requestor_can_consent()?.unwrap_or(false);
 
-        let requestor = requestor(&ctx)?;
+        let requestor = self.requestor(&ctx)?;
 
         let mut buf = [0u8; MAX_FILE_DESIGNATOR + MAX_SOFTWARE_VERSION_STR_LEN];
         let image = match self
@@ -406,9 +424,9 @@ impl<I: OtaImagesRegistry> ClusterAsyncHandler for OtaProviderHandler<I> {
 
         // The download URI points at this node (on the accessing fabric) and
         // carries the file designator as its path.
-        let node_id = ctx
-            .exchange()
-            .with_state(|state| Ok(state.fabrics.fabric(requestor.fab_idx)?.node_id()))?;
+        let node_id = ctx.exchange_id().with_state(self.matter, |state| {
+            Ok(state.fabrics.fabric(requestor.fab_idx)?.node_id())
+        })?;
 
         let mut uri = String::<200>::new();
         write!(uri, "bdx://{:016X}/{}", node_id, image.file_designator)
@@ -433,7 +451,7 @@ impl<I: OtaImagesRegistry> ClusterAsyncHandler for OtaProviderHandler<I> {
         request: ApplyUpdateRequestRequest<'_>,
         response: ApplyUpdateResponseBuilder<P>,
     ) -> Result<P, Error> {
-        let requestor = requestor(&ctx)?;
+        let requestor = self.requestor(&ctx)?;
         let update_token = request.update_token()?;
         let new_version = request.new_version()?;
 
@@ -459,7 +477,7 @@ impl<I: OtaImagesRegistry> ClusterAsyncHandler for OtaProviderHandler<I> {
         ctx: impl InvokeContext,
         request: NotifyUpdateAppliedRequest<'_>,
     ) -> Result<(), Error> {
-        let requestor = requestor(&ctx)?;
+        let requestor = self.requestor(&ctx)?;
 
         self.images
             .applied(
@@ -612,21 +630,4 @@ where
 
         writer.finish().await
     }
-}
-
-/// The requestor invoking a command: the accessing fabric and the peer node.
-fn requestor(ctx: impl InvokeContext) -> Result<OtaRequestorId, Error> {
-    let fab_idx = NonZeroU8::new(ctx.cmd().fab_idx).ok_or(ErrorCode::Invalid)?;
-
-    let exchange = ctx.exchange();
-    let node_id = exchange
-        .with_state(|state| {
-            Ok(exchange
-                .id()
-                .session(&mut state.sessions)
-                .get_peer_node_id())
-        })?
-        .ok_or(ErrorCode::Invalid)?;
-
-    Ok(OtaRequestorId { fab_idx, node_id })
 }

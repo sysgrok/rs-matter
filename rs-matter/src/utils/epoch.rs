@@ -48,3 +48,51 @@ pub const MATTER_CERT_DOESNT_EXPIRE: u64 = 252_455_615_999;
 // `build.rs`. Used by `MatterState::LkgUtc` as the seed value for the
 // Last-Known-Good UTC Time on a freshly-flashed device.
 include!(concat!(env!("OUT_DIR"), "/build_time.rs"));
+
+/// An enum describing the current UTC timestamp the real-time clock is aware of.
+///
+/// The timestamp is expressed as Matter-epoch microseconds.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum UtcTime {
+    /// The RTC is actively tracking the current time, anchored at the given Matter-epoch microseconds value.
+    Reliable(u64),
+    /// The RTC is not currently tracking the current time, but the given Matter-epoch microseconds value is
+    /// the last known good UTC time persisted on the device.
+    ///
+    /// Do note that a "last known" time is always available, as the firmware build timestamp is used as the
+    /// initial value on a freshly-flashed device.
+    LastKnown(u64),
+}
+
+impl UtcTime {
+    /// Return the current UTC time if available, or `None` if no reliable time is currently tracked.
+    pub const fn reliable(&self) -> Option<u64> {
+        match self {
+            UtcTime::Reliable(utc) => Some(*utc),
+            UtcTime::LastKnown(_) => None,
+        }
+    }
+
+    /// Return the current UTC time if available, or the persisted LKG UTC otherwise.
+    pub const fn any(&self) -> u64 {
+        match self {
+            UtcTime::Reliable(utc) | UtcTime::LastKnown(utc) => *utc,
+        }
+    }
+
+    /// Return the current UTC time in seconds if available, or `None` if no reliable time is currently tracked.
+    pub const fn reliable_secs(&self) -> Option<u64> {
+        match self {
+            UtcTime::Reliable(utc) => Some(*utc / 1_000_000),
+            UtcTime::LastKnown(_) => None,
+        }
+    }
+
+    /// Return the current UTC time in seconds if available, or the persisted LKG UTC otherwise.
+    pub const fn any_secs(&self) -> u64 {
+        match self {
+            UtcTime::Reliable(utc) | UtcTime::LastKnown(utc) => *utc / 1_000_000,
+        }
+    }
+}

@@ -23,7 +23,6 @@ use verhoeff::Verhoeff;
 
 use crate::error::ErrorCode;
 use crate::tlv::{EitherIter, TLVElement, TLVTag, TLV};
-use crate::transport::network::mdns::CommissionableFilter;
 use crate::utils::codec::base38;
 use crate::utils::storage::{String, WriteBuf};
 
@@ -112,33 +111,6 @@ where
     T: Fn() -> I,
     I: Iterator<Item = Result<u8, Error>> + 'a,
 {
-    /// Create a new QR payload from the device basic info config
-    ///
-    /// # Arguments
-    /// - `discovery_capabilities` - Discovery capabilities of the device
-    /// - `comm_flow` - Commissioning flow type
-    /// - `comm_data` - Basic commissioning data
-    /// - `dev_det` - Device basic info config
-    /// - `optional_data` - Function that provides an iterator over optional TLV data bytes.
-    ///   NOTE: Should be ordered by tag number in ascending order.
-    pub const fn new_from_basic_info(
-        discovery_capabilities: DiscoveryCapabilities,
-        comm_flow: CommFlowType,
-        comm_data: BasicCommData,
-        dev_det: &'a BasicInfoConfig,
-        optional_data: T,
-    ) -> Self {
-        Self::new(
-            discovery_capabilities,
-            comm_flow,
-            comm_data,
-            dev_det.vid,
-            dev_det.pid,
-            dev_det.serial_no,
-            optional_data,
-        )
-    }
-
     /// Create a new QR payload
     ///
     /// # Arguments
@@ -604,26 +576,6 @@ impl<'a> QrPayload<'a, &'a [u8]> {
     pub const fn optional_data(&self) -> &'a [u8] {
         self.optional_data
     }
-
-    /// A [`CommissionableFilter`] that discovers the device this QR code describes.
-    ///
-    /// A QR code carries the **full 12-bit** discriminator, so this filters on
-    /// `discriminator` and can narrow discovery to a single device. (Contrast
-    /// [`QrPayload::<()>::commissionable_filter`], built from a manual pairing code,
-    /// which can only filter on the short discriminator.)
-    ///
-    /// Only the discriminator is set. The vendor and product IDs are deliberately
-    /// *not* included even though the QR carries them: per the Matter Core spec a
-    /// device may advertise an **anonymized** Product ID of 0 during discovery, so
-    /// filtering on the QR's PID would fail to find such a device. Add them to the
-    /// returned filter if the extra selectivity is wanted and the device is known
-    /// not to anonymize.
-    pub fn commissionable_filter(&self) -> CommissionableFilter {
-        CommissionableFilter {
-            discriminator: Some(self.discriminator()),
-            ..Default::default()
-        }
-    }
 }
 
 impl<'a> QrPayload<'a, ()> {
@@ -817,25 +769,6 @@ impl<'a> QrPayload<'a, ()> {
     ///   Compliance Ledger (see [`Self::vid_pid`]).
     pub fn comm_flow(&self) -> Option<CommFlowType> {
         matches!(self.comm_flow, CommFlowType::Standard).then_some(CommFlowType::Standard)
-    }
-
-    /// A [`CommissionableFilter`] that discovers the device this manual pairing code
-    /// describes.
-    ///
-    /// A manual pairing code only carries the **short** (4-bit) discriminator, so
-    /// this necessarily filters on `short_discriminator` - which narrows discovery
-    /// to 1-in-16 devices rather than to exactly one. Getting this right is the
-    /// whole point of the method: the short value must not end up in the filter's
-    /// full-discriminator field, where it would match nothing.
-    ///
-    /// The vendor and product IDs are not included even when the 21-digit variant
-    /// carries them, since a device may advertise an anonymized Product ID of 0
-    /// during discovery.
-    pub fn commissionable_filter(&self) -> CommissionableFilter {
-        CommissionableFilter {
-            short_discriminator: Some(self.short_discriminator()),
-            ..Default::default()
-        }
     }
 }
 
@@ -1391,18 +1324,16 @@ mod tests {
             password: 34567890_u32.to_le_bytes().into(),
             discriminator: 2976,
         };
-        let dev_det = BasicInfoConfig {
-            vid: 9050,
-            pid: 65279,
-            ..Default::default()
-        };
+        let (vid, pid, serial_no) = (9050, 65279, "");
 
         let disc_cap = DiscoveryCapabilities::BLE;
-        let qr_code_data = QrPayload::new_from_basic_info(
+        let qr_code_data = QrPayload::new(
             disc_cap,
             CommFlowType::Standard,
             comm_data,
-            &dev_det,
+            vid,
+            pid,
+            serial_no,
             no_optional_data,
         );
         let mut buf = [0; 1024];
@@ -1453,19 +1384,17 @@ mod tests {
             password: 20202021_u32.to_le_bytes().into(),
             discriminator: 3840,
         };
-        let dev_det = BasicInfoConfig {
-            vid: 65521,
-            pid: 32769,
-            ..Default::default()
-        };
+        let (vid, pid, serial_no) = (65521, 32769, "");
 
         let caps = DiscoveryCapabilities::BLE | DiscoveryCapabilities::NTL;
 
-        let payload = QrPayload::new_from_basic_info(
+        let payload = QrPayload::new(
             caps,
             CommFlowType::Standard,
             comm_data,
-            &dev_det,
+            vid,
+            pid,
+            serial_no,
             no_optional_data,
         );
 
@@ -1490,17 +1419,15 @@ mod tests {
             password: 34567890_u32.to_le_bytes().into(),
             discriminator: 2976,
         };
-        let dev_det = BasicInfoConfig {
-            vid: 9050,
-            pid: 65279,
-            ..Default::default()
-        };
+        let (vid, pid, serial_no) = (9050, 65279, "");
 
-        let qr_code_data = QrPayload::new_from_basic_info(
+        let qr_code_data = QrPayload::new(
             DiscoveryCapabilities::BLE,
             CommFlowType::Standard,
             comm_data,
-            &dev_det,
+            vid,
+            pid,
+            serial_no,
             no_optional_data,
         );
 
@@ -1530,19 +1457,16 @@ mod tests {
             password: 20202021_u32.to_le_bytes().into(),
             discriminator: 3840,
         };
-        let dev_det = BasicInfoConfig {
-            vid: 65521,
-            pid: 32769,
-            serial_no: "1234567890",
-            ..Default::default()
-        };
+        let (vid, pid, serial_no) = (65521, 32769, "1234567890");
 
         let disc_cap = DiscoveryCapabilities::IP;
-        let qr_code_data = QrPayload::new_from_basic_info(
+        let qr_code_data = QrPayload::new(
             disc_cap,
             CommFlowType::Standard,
             comm_data,
-            &dev_det,
+            vid,
+            pid,
+            serial_no,
             no_optional_data,
         );
         let mut buf = [0; 1024];
@@ -1564,12 +1488,7 @@ mod tests {
             password: 20202021_u32.to_le_bytes().into(),
             discriminator: 3840,
         };
-        let dev_det = BasicInfoConfig {
-            vid: 65521,
-            pid: 32769,
-            serial_no: "1234567890",
-            ..Default::default()
-        };
+        let (vid, pid, serial_no) = (65521, 32769, "1234567890");
 
         let disc_cap = DiscoveryCapabilities::IP;
         let optional_data = || {
@@ -1588,11 +1507,13 @@ mod tests {
             .flat_map(TLV::result_into_bytes_iter)
         };
 
-        let qr_code_data = QrPayload::new_from_basic_info(
+        let qr_code_data = QrPayload::new(
             disc_cap,
             CommFlowType::Standard,
             comm_data,
-            &dev_det,
+            vid,
+            pid,
+            serial_no,
             optional_data,
         );
 
@@ -1689,34 +1610,6 @@ mod tests {
             };
             assert_eq!(comm_data.compute_pairing_code(), code);
         }
-    }
-
-    #[test]
-    fn commissionable_filter_uses_the_right_discriminator_field() {
-        // A QR carries the full 12-bit discriminator...
-        let mut buf = [0; 128];
-        let qr = unwrap!(
-            QrPayload::parse("MT:-24J0AFN00KA064IJ3P0IXZB0DK5N1K8SQ1RYCU1-A40", &mut buf),
-            "Failed to parse"
-        );
-        let filter = qr.commissionable_filter();
-
-        assert_eq!(filter.discriminator, Some(3840));
-        assert_eq!(filter.short_discriminator, None);
-
-        // ... while a manual pairing code only carries the upper 4 bits, which must
-        // land in `short_discriminator` (0xF00 >> 8 == 15) and *not* in the
-        // full-discriminator field, where it would match nothing.
-        let manual = unwrap!(QrPayload::parse_pairing_code("34970112332"), "Failed");
-        let filter = manual.commissionable_filter();
-
-        assert_eq!(filter.short_discriminator, Some(15));
-        assert_eq!(filter.discriminator, None);
-
-        // Neither constrains vendor/product: a device may advertise an anonymized
-        // Product ID of 0 during discovery.
-        assert_eq!(filter.vendor_id, None);
-        assert_eq!(filter.product_id, None);
     }
 
     #[test]

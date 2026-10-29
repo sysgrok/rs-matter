@@ -121,7 +121,7 @@ fn main() -> Result<(), Error> {
         &matter,
         &crypto,
         &buffers,
-        data_model(rand, &bindings),
+        data_model(&matter, rand, &bindings),
         &kv,
         &state,
     );
@@ -398,6 +398,7 @@ const NODE: Node<'static> = Node {
 /// The Data Model handler: root endpoint 0 + the Descriptor and Binding handlers
 /// on the switch endpoint.
 fn data_model<'a, const N: usize>(
+    matter: &'a Matter<'a>,
     mut rand: impl Rng + Copy,
     bindings: &'a Bindings<N>,
 ) -> impl DataModel + 'a {
@@ -405,7 +406,7 @@ fn data_model<'a, const N: usize>(
         NODE,
         endpoints::EthSysHandlerBuilder::new()
             .netif_diag(&SysNetifs)
-            .build(rand)
+            .build(matter, rand)
             .chain(
                 |e, c| e == SWITCH_ENDPOINT && c == desc::DescHandler::CLUSTER.id,
                 Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),

@@ -15,9 +15,9 @@
  *    limitations under the License.
  */
 
-use crate::dm::clusters::basic_info::BasicInfoConfig;
-use crate::dm::clusters::icd_mgmt::{IcdAdvertisement, OperatingModeEnum};
+use crate::basic_info::BasicInfoConfig;
 use crate::error::{Error, ErrorCode};
+use crate::icd::{IcdAdvertisement, IcdOperatingMode};
 use crate::utils::timers::{Duration, Instant};
 
 use super::{plain_hdr::PlainHdr, proto_hdr::ProtoHdr};
@@ -109,7 +109,7 @@ pub(crate) fn advertised_sii(
 
     let sii = match (dev_det.sii, icd.operating_mode) {
         (None, _) => icd.slow_poll_ms,
-        (Some(sii), Some(OperatingModeEnum::SIT)) => sii.min(icd.slow_poll_ms),
+        (Some(sii), Some(IcdOperatingMode::Sit)) => sii.min(icd.slow_poll_ms),
         (Some(sii), _) => sii,
     };
 

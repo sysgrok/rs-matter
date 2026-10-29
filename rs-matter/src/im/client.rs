@@ -26,9 +26,9 @@
 //! terminal `SubscribeResponse`. Server-initiated post-establishment
 //! reports arrive on new exchanges over the same session and are
 //! routed by the [`InteractionModel`](crate::im::InteractionModel) to
-//! the [`ReportDataHandler`](crate::dm::ReportDataHandler) supplied via
+//! the [`ReportDataHandler`](crate::im::ReportDataHandler) supplied via
 //! [`InteractionModel::new_with_reports`](crate::im::InteractionModel::new_with_reports)
-//! — see [`SubscriptionCtx`](crate::dm::SubscriptionCtx) for the
+//! — see [`SubscriptionCtx`](crate::im::SubscriptionCtx) for the
 //! identity a report is matched by.
 
 use core::future::Future;
@@ -37,17 +37,23 @@ use either::Either;
 
 pub use super::{AttrId, ClusterId, EndptId};
 
+#[cfg(feature = "groups")]
+use super::PROTO_ID_INTERACTION_MODEL;
 use crate::error::{Error, ErrorCode};
 #[cfg(feature = "groups")]
 use crate::tlv::TLVWriteParent;
 use crate::tlv::{FromTLV, TLVBuilderParent, TLVElement, TLVTag, TLVWrite, TagType, ToTLV};
+#[cfg(feature = "groups")]
+use crate::transport::exchange::MessageMeta;
 use crate::transport::exchange::{Exchange, OwnedSender, OwnedSenderTx};
 #[cfg(feature = "groups")]
 use crate::utils::storage::WriteBuf;
+use crate::utils::sync::MaybeSend;
 
 use super::{
-    IMStatusCode, InvReqBuilder, InvokeResp, OpCode, ReadReqBuilder, ReportDataResp, StatusResp,
-    SubscribeReqBuilder, SubscribeResp, TimedReq, WriteReqBuilder, WriteResp, IM_REVISION,
+    IMStatusCode, ImInvokeChunk, ImReadChunk, ImTransaction, ImWriteHandle, InvReqBuilder,
+    InvokeResp, OpCode, ReadReqBuilder, ReportDataResp, StatusResp, SubscribeReqBuilder,
+    SubscribeResp, TimedReq, WriteReqBuilder, WriteResp, IM_REVISION,
 };
 
 /// IM Client trait — extension over an [`Exchange`] that adds the
@@ -65,12 +71,12 @@ use super::{
 ///   loop is handled internally and the first response chunk is
 ///   handed back for the caller to iterate via `complete()`.
 ///
-/// On top of these, the codegen-emitted per-cluster
-/// `<ClusterName>Client<'a>` traits add high-level single-shot
-/// methods (`<cluster>_<command>` / `<cluster>_<attr>_read` /
-/// `<cluster>_<attr>_write`) that bake in the cluster/attr/cmd IDs
-/// and the chunk-drain / status-to-error conversion for the common
-/// case.
+/// Separately, the codegen-emitted per-cluster `<ClusterName>Client`
+/// traits add high-level single-shot methods (`<cluster>().<command>` /
+/// `<cluster>().<attr>_read` / `<cluster>().<attr>_write`) that bake in
+/// the cluster/attr/cmd IDs and the chunk-drain / status-to-error
+/// conversion for the common case. They work over any
+/// [`ImTransaction`], which `Exchange` implements.
 ///
 /// The trait sits over `Self: Into<Exchange<'a>>` so any type that
 /// converts to an exchange can opt in via a one-line blanket impl;
@@ -296,6 +302,76 @@ pub type GroupInvokeRequestsBuilder<'x, 'y> = crate::im::CmdDataArrayBuilder<
 /// the trait is `use`d. The default-method bodies do all the work;
 /// this impl just opts the type in.
 impl<'a> ImClient<'a> for Exchange<'a> {}
+
+/// Lets the generated cluster clients run their transactions over an exchange.
+impl<'a> ImTransaction for Exchange<'a> {
+    type ReadSender = ReadSender<'a>;
+    type WriteSender = WriteSender<'a>;
+    type InvokeSender = InvokeSender<'a>;
+    type ReadChunk = ReadRespChunk<'a>;
+    type WriteHandle = WriteRespHandle<'a>;
+    type InvokeChunk = InvokeRespChunk<'a>;
+
+    fn read_with<B>(
+        self,
+        build: B,
+    ) -> impl Future<Output = Result<Self::ReadChunk, Error>> + MaybeSend
+    where
+        B: FnMut(ReadReqBuilder<Self::ReadSender>) -> Result<Self::ReadSender, Error> + MaybeSend,
+    {
+        read_with(self, build)
+    }
+
+    fn write_with<B>(
+        self,
+        timed_timeout_ms: Option<u16>,
+        build: B,
+    ) -> impl Future<Output = Result<Self::WriteHandle, Error>> + MaybeSend
+    where
+        B: FnMut(WriteReqBuilder<Self::WriteSender>) -> Result<Self::WriteSender, Error>
+            + MaybeSend,
+    {
+        write_with(self, timed_timeout_ms, build)
+    }
+
+    fn invoke_with<B>(
+        self,
+        timed_timeout_ms: Option<u16>,
+        build: B,
+    ) -> impl Future<Output = Result<Self::InvokeChunk, Error>> + MaybeSend
+    where
+        B: FnMut(InvReqBuilder<Self::InvokeSender>) -> Result<Self::InvokeSender, Error>
+            + MaybeSend,
+    {
+        invoke_with(self, timed_timeout_ms, build)
+    }
+}
+
+impl ImReadChunk for ReadRespChunk<'_> {
+    fn response(&self) -> Result<ReportDataResp<'_>, Error> {
+        ReadRespChunk::response(self)
+    }
+
+    fn complete(self) -> impl Future<Output = Result<Option<Self>, Error>> + MaybeSend {
+        ReadRespChunk::complete(self)
+    }
+}
+
+impl ImInvokeChunk for InvokeRespChunk<'_> {
+    fn response(&self) -> Result<Option<InvokeResp<'_>>, Error> {
+        InvokeRespChunk::response(self)
+    }
+
+    fn complete(self) -> impl Future<Output = Result<Option<Self>, Error>> + MaybeSend {
+        InvokeRespChunk::complete(self)
+    }
+}
+
+impl ImWriteHandle for WriteRespHandle<'_> {
+    fn response(&self) -> Result<WriteResp<'_>, Error> {
+        WriteRespHandle::response(self)
+    }
+}
 
 /// Outcome of calling `.tx()` on a transaction sender (`*Sender`).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -1469,7 +1545,11 @@ where
 
             builder.end()?.end()?;
 
-            Ok(Some(OpCode::InvokeRequest.meta().reliable(false)))
+            Ok(Some(MessageMeta::new(
+                PROTO_ID_INTERACTION_MODEL,
+                OpCode::InvokeRequest as u8,
+                false,
+            )))
         })
         .await
 }
