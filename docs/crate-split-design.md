@@ -399,6 +399,26 @@ Update CI, `xtask` (copyright, integration tests), `bloat-check`, the README and
 CHANGELOG. Measure check times against the table in #559, and flash size with
 `bloat-check`.
 
+What changed:
+
+- **CI.** The clippy steps of `rs-matter` run without `--no-deps`, so that the `rs-matter-*`
+  crates, which are its path dependencies, are linted with each feature set too. The Test
+  step runs the tests of all the crates of the workspace, except the examples, the test
+  binaries, the code generator and the macros, which have steps of their own. It passes the
+  features of `rs-matter` (`--features rs-matter/<feature>`), which forwards them to the
+  other crates. Miri runs the same unit tests as before, now named by crate: those of
+  `utils`, `tlv`, `dm-base` (without the file I/O of `persist`), `im` (without the
+  responders), `dm`, and the IM client and the transport of `node`.
+- **Coverage.** Measured over the workspace in the same way. `xtask coverage` groups the
+  files by crate and module (`node/transport`, `dm/clusters`, ...), and the report uses
+  depth 2, which gives about the rows of depth 1 before the split.
+- **`xtask copyright`** needs no change: it finds the crates from the tracked `Cargo.toml`
+  files.
+- **Publishing.** The publishing workflows list the new crates, in the order in which they
+  have to be published.
+- **`bloat-check`** depends on the facade, as before; its lockfile gains the new crates.
+- **README.** A section lists the crates.
+
 ## 10. Expected effect
 
 An edit to `node`, `im` or `dm` no longer re-checks the generated code. #559 estimates
@@ -417,6 +437,51 @@ How to measure, before and after the split:
   common cases.
 - Note that `--workspace --all-targets` also re-checks the crates that depend on the edited
   one, including the examples and the tests, so those count too.
+
+### Measured
+
+On an 8-thread Intel i7-6700 with 32 GB, `CARGO_BUILD_JOBS=4`, default features,
+incremental checks. "Before" is 14baec09 (the commit before step 1), "after" is the split.
+Each row is the time of a re-check after touching a file, after adding a function to it, and
+after removing the function again, in seconds.
+
+`cargo check --workspace --all-targets` (what rust-analyzer runs on save):
+
+| Edited file in | Before | After |
+|---|---|---|
+| `node` (`fabric.rs`) | 52.7 / 54.1 / 55.6 | 5.9 / 9.2 / 8.9 |
+| `im` (`subscriptions.rs`) | 50.2 / 52.3 / 53.4 | 4.8 / 4.7 / 4.7 |
+| `dm` (`clusters/app/on_off.rs`) | 52.3 / 54.0 / 51.8 | 4.9 / 6.3 / 6.1 |
+| `dm-base` (`cluster.rs`) | 51.4 / 53.2 / 52.6 | 46.4 / 48.4 / 49.4 |
+| `tlv` (`read.rs`) | 48.9 / 54.0 / 54.9 | 46.5 / 43.1 / 45.1 |
+| nothing (no-op check) | 3.8 | 0.3 |
+
+`cargo check -p rs-matter`, as in the table of #559, after an edit in the node:
+
+| | Before | After |
+|---|---|---|
+| `fabric.rs` | 37.7 / 43.1 / 35.3 | 3.4 / 3.1 / 3.0 |
+
+An edit outside of the generated crate and the crates below it now re-checks in about 3 to
+9 seconds instead of about 50. An edit in `dm-base` or `tlv` still re-checks the generated
+crate, and stays at about 45 seconds. A first check of the generated crate alone takes about
+1 minute 50 seconds.
+
+Flash: `.text` of `bloat-check`, release build (fat LTO, one codegen unit), in bytes:
+
+| Target | Before (14baec09) | After step 1 (fc37533a) | After the split |
+|---|---|---|---|
+| thumbv6m | 305,984 | 306,288 (+304) | 308,316 (+2,028) |
+| thumbv7em | 288,120 | 288,556 (+436) | 289,828 (+1,272) |
+| riscv32imac | 383,770 | 384,436 (+666) | 386,722 (+2,286) |
+
+The split itself adds 0.4% to 0.6%. A comparison of the symbols on thumbv7em shows no single
+cause: about 280 bytes more of the code LLVM outlines, several copies of small TLV helpers
+that one crate had once (e.g. `TLVValueType::from_u8` five times), and small differences in
+inlining in the large responders. `#[inline]` and generic functions get a copy in each crate
+that uses them, and LTO does not merge the identical copies it does not inline. Identical
+code folding in the linker (`-C link-arg=--icf=all` with `lld`) could remove those copies;
+this was not tried.
 
 ## 11. Possible follow-ups
 

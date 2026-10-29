@@ -35,6 +35,8 @@ defmt = { workspace = true, optional = true }
 
 [dev-dependencies]
 rs-matter-crypto = { workspace = true, features = ["rustcrypto"] }
+# For the `std` time driver of `embassy-time`
+rs-matter-utils = { workspace = true, features = ["os"] }
 embassy-time-queue-utils = { workspace = true, features = ["generic-queue-64"] }
 futures-lite = { workspace = true }
 
