@@ -3,7 +3,7 @@ name = "rs-matter-utils"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Native Rust implementation of the Matter (Smart-Home) ecosystem - utilities"
+description = "Native Rust implementation of the Matter (Smart-Home) ecosystem - the error type and utilities"
 repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
@@ -15,15 +15,20 @@ rust-version.workspace = true
 default = ["os", "log"]
 # OS-based (non-baremetal) targets.
 os = ["std", "critical-section/std", "embassy-sync/std", "embassy-time/std"]
-std = ["alloc", "rs-matter-error/std"]
-alloc = ["defmt?/alloc", "rs-matter-error/alloc"]
+std = ["alloc"]
+alloc = ["defmt?/alloc"]
 # The futures and the shared types are `Send` (and `Sync`), for work-stealing executors.
 send-sync = []
-defmt = ["dep:defmt", "heapless/defmt", "embassy-time/defmt", "rs-matter-error/defmt"]
-log = ["dep:log", "embassy-time/log", "rs-matter-error/log"]
+# Capture a backtrace in each error.
+backtrace = []
+# Conversion from the errors of BlueR.
+bluer = ["std", "dep:bluer"]
+# Conversion from the errors of zbus.
+zbus = ["std", "dep:zbus"]
+defmt = ["dep:defmt", "heapless/defmt", "embassy-time/defmt"]
+log = ["dep:log", "embassy-time/log"]
 
 [dependencies]
-rs-matter-error = { workspace = true }
 bitflags = { workspace = true }
 critical-section = { workspace = true }
 embassy-futures = { workspace = true }
@@ -31,9 +36,14 @@ embassy-sync = { workspace = true }
 embassy-time = { workspace = true }
 embedded-io-async = { workspace = true }
 heapless = { workspace = true }
+num_enum = { workspace = true }
 pinned-init = { workspace = true }
 log = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
+zbus = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures-lite = { workspace = true }

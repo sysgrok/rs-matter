@@ -13,13 +13,12 @@ rust-version.workspace = true
 
 [features]
 default = ["std", "log"]
-std = ["alloc", "rs-matter-error/std", "rs-matter-utils/std"]
-alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc"]
-defmt = ["dep:defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt"]
-log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log"]
+std = ["alloc", "rs-matter-utils/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc"]
+defmt = ["dep:defmt", "rs-matter-utils/defmt"]
+log = ["dep:log", "rs-matter-utils/log"]
 
 [dependencies]
-rs-matter-error = { workspace = true }
 rs-matter-utils = { workspace = true }
 rs-matter-macros = { workspace = true }
 num = { workspace = true }

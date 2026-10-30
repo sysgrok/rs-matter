@@ -35,8 +35,8 @@ use num_traits::ToBytes;
 use crate::error::{Error, ErrorCode};
 
 // The dependencies, under the names the code uses for them
-use rs_matter_error as error;
 use rs_matter_utils as utils;
+use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -50,7 +50,7 @@ pub use rs_matter_macros::{FromTLV, ToTLV};
 /// `bitflags_tlv!` uses, so that it only needs the path to this crate.
 #[doc(hidden)]
 pub mod __private {
-    pub use rs_matter_error::{Error, ErrorCode};
+    pub use rs_matter_utils::error::{Error, ErrorCode};
     pub use rs_matter_utils::init::{into_init, try_init, Init};
 }
 

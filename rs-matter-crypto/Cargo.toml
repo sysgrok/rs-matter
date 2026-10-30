@@ -13,8 +13,8 @@ rust-version.workspace = true
 
 [features]
 default = ["std", "rustcrypto", "log"]
-std = ["alloc", "rand", "rs-matter-error/std", "rs-matter-utils/std", "rs-matter-tlv/std"]
-alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc"]
+std = ["alloc", "rand", "rs-matter-utils/std", "rs-matter-tlv/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc"]
 # Multicast groups support.
 groups = []
 # Crypto backend: Rust Crypto.
@@ -23,11 +23,10 @@ rustcrypto = ["alloc", "digest", "cipher", "ccm", "elliptic-curve", "primeorder"
 openssl = ["alloc", "dep:openssl", "foreign-types", "hmac", "sha2"]
 # Crypto backend: mbedTLS.
 mbedtls = ["alloc", "dep:mbedtls-rs-sys"]
-defmt = ["dep:defmt", "mbedtls-rs-sys?/defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt"]
-log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log", "rs-matter-tlv/log"]
+defmt = ["dep:defmt", "mbedtls-rs-sys?/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-tlv/log"]
 
 [dependencies]
-rs-matter-error = { workspace = true }
 rs-matter-utils = { workspace = true }
 rs-matter-tlv = { workspace = true }
 rand_core = { workspace = true }

@@ -17,26 +17,12 @@
 
 //! The error type of `rs-matter`.
 
-#![cfg_attr(not(feature = "std"), no_std)]
-#![allow(unknown_lints)]
-#![allow(clippy::uninlined_format_args)]
-// `cargo llvm-cov` sets `coverage_nightly` when it runs on a nightly toolchain;
-// the test modules are then excluded from the coverage report
-#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
-
 use core::{array::TryFromSliceError, str::Utf8Error};
 
 #[cfg(all(feature = "alloc", feature = "backtrace"))]
 use alloc::{boxed::Box, string::ToString};
 
-// Not through `utils::io`, as this crate is below `rs-matter-utils`
-use embedded_io_async as io;
-
-#[cfg(feature = "alloc")]
-extern crate alloc;
-
-// This mod MUST go first, so that the others see its macros.
-pub(crate) mod fmt;
+use crate::io;
 
 // TODO: The error code enum is in a need of an overhaul
 //

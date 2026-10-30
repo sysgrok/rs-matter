@@ -104,9 +104,9 @@ use rs_matter_cert::attest;
 use rs_matter_crypto as crypto;
 use rs_matter_crypto::group_keys;
 use rs_matter_dm_base::persist;
-use rs_matter_error as error;
 use rs_matter_pairing as pairing;
 use rs_matter_tlv as tlv;
+use rs_matter_utils::error;
 
 pub use crate::pairing::BasicCommData;
 

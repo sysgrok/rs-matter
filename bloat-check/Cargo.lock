@@ -3353,7 +3353,6 @@ dependencies = [
  "rs-matter-dm",
  "rs-matter-dm-base",
  "rs-matter-dm-clusters",
- "rs-matter-error",
  "rs-matter-im",
  "rs-matter-im-base",
  "rs-matter-node",
@@ -3401,7 +3400,6 @@ dependencies = [
  "num-derive",
  "num-traits",
  "rs-matter-crypto",
- "rs-matter-error",
  "rs-matter-tlv",
  "rs-matter-utils",
  "time",
@@ -3446,7 +3444,6 @@ dependencies = [
  "pbkdf2",
  "primeorder",
  "rand_core 0.10.1",
- "rs-matter-error",
  "rs-matter-tlv",
  "rs-matter-utils",
  "sec1",
@@ -3472,7 +3469,6 @@ dependencies = [
  "rs-matter-crypto",
  "rs-matter-dm-base",
  "rs-matter-dm-clusters",
- "rs-matter-error",
  "rs-matter-im-base",
  "rs-matter-node",
  "rs-matter-tlv",
@@ -3490,7 +3486,6 @@ dependencies = [
  "log",
  "rand_core 0.10.1",
  "rs-matter-crypto",
- "rs-matter-error",
  "rs-matter-im-base",
  "rs-matter-tlv",
  "rs-matter-utils",
@@ -3506,21 +3501,10 @@ dependencies = [
  "log",
  "rs-matter-codegen",
  "rs-matter-dm-base",
- "rs-matter-error",
  "rs-matter-im-base",
  "rs-matter-tlv",
  "rs-matter-utils",
  "strum 0.28.0",
-]
-
-[[package]]
-name = "rs-matter-error"
-version = "0.4.1"
-dependencies = [
- "defmt 1.1.1",
- "embedded-io-async 0.7.0",
- "log",
- "num_enum",
 ]
 
 [[package]]
@@ -3531,7 +3515,6 @@ dependencies = [
  "log",
  "rs-matter-crypto",
  "rs-matter-dm-base",
- "rs-matter-error",
  "rs-matter-im-base",
  "rs-matter-node",
  "rs-matter-tlv",
@@ -3548,7 +3531,6 @@ dependencies = [
  "num-derive",
  "num-traits",
  "num_enum",
- "rs-matter-error",
  "rs-matter-tlv",
  "rs-matter-utils",
 ]
@@ -3581,7 +3563,6 @@ dependencies = [
  "rs-matter-cert",
  "rs-matter-crypto",
  "rs-matter-dm-base",
- "rs-matter-error",
  "rs-matter-im-base",
  "rs-matter-pairing",
  "rs-matter-tlv",
@@ -3599,7 +3580,6 @@ dependencies = [
  "rs-matter-crypto",
  "rs-matter-dm-base",
  "rs-matter-dm-clusters",
- "rs-matter-error",
  "rs-matter-im-base",
  "rs-matter-node",
  "rs-matter-tlv",
@@ -3614,7 +3594,6 @@ dependencies = [
  "log",
  "qrcodegen-no-heap",
  "rs-matter-crypto",
- "rs-matter-error",
  "rs-matter-tlv",
  "rs-matter-utils",
  "verhoeff",
@@ -3630,7 +3609,6 @@ dependencies = [
  "num-derive",
  "num-traits",
  "pinned-init",
- "rs-matter-error",
  "rs-matter-macros",
  "rs-matter-utils",
 ]
@@ -3648,8 +3626,8 @@ dependencies = [
  "embedded-io-async 0.7.0",
  "heapless 0.9.3",
  "log",
+ "num_enum",
  "pinned-init",
- "rs-matter-error",
 ]
 
 [[package]]

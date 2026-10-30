@@ -13,8 +13,8 @@ rust-version.workspace = true
 
 [features]
 default = ["std", "log"]
-std = ["alloc", "rs-matter-error/std", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-im-base/std"]
-alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-im-base/alloc"]
+std = ["alloc", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-im-base/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-im-base/alloc"]
 # Extends the IM buffers to 1MB (from 1500 B), for Matter over TCP.
 large-buffers = []
 # Size (in bytes) of the key-value persistence scratch buffer owned by `Matter`.
@@ -26,11 +26,10 @@ kv-blob-store-8192 = []
 kv-blob-store-4096 = []
 kv-blob-store-2048 = []
 kv-blob-store-1024 = []
-defmt = ["dep:defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-im-base/defmt"]
-log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-im-base/log"]
+defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-im-base/defmt"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-im-base/log"]
 
 [dependencies]
-rs-matter-error = { workspace = true }
 rs-matter-utils = { workspace = true }
 rs-matter-tlv = { workspace = true }
 rs-matter-crypto = { workspace = true }

@@ -29,9 +29,9 @@
 use crate::error::Error;
 
 // The dependencies, under the names the code uses for them
-use rs_matter_error as error;
 use rs_matter_tlv as tlv;
 use rs_matter_utils as utils;
+use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

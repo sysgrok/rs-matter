@@ -184,13 +184,12 @@ generated code and keeps its `exchange()`.
 
 ## 5. Crates
 
-Every crate also depends on `error` and `utils`; the table leaves those two out after the
-first rows. Line counts are hand-written lines in the current code.
+Every crate also depends on `utils`; the table leaves it out after the first row. Line
+counts are hand-written lines in the current code.
 
 | Crate | Contents | Lines | Depends on | Used by |
 |---|---|---|---|---|
-| `rs-matter-error` | `Error`, `ErrorCode` (unchanged) | 0.5K | - | all |
-| `rs-matter-utils` | `utils`, without the zbus proxies | 8K | error | all except error |
+| `rs-matter-utils` | `utils`, without the zbus proxies; `Error`, `ErrorCode` (unchanged) as its `error` module | 8.5K | - | all |
 | `rs-matter-tlv` | TLV | 9.1K | - | all below |
 | `rs-matter-crypto` | `Crypto` traits, canonical types, rand, backends (by feature), group key derivation | 6.7K | tlv | cert, pairing, dm-base, node, im, dm, onboard |
 | `rs-matter-cert` | operational certificates, x509 and CSR, attestation (DAC chain, CD, trust store), `DeviceAttestation` | 7.7K | tlv, crypto | node, dm, onboard |
@@ -284,14 +283,13 @@ Smaller items:
   implement it. The responders that combine IM, secure channel and BDX move to `im`.
 - The event TLV writer and `EVENT_DATA_TAG` move to the data model types; the event queue
   stays in `im`. `ImStats` and `DeviceLoad` move to the data model types.
-- `From<bluer::Error> for Error` must live in the error crate because of the orphan rule. The
-  error crate gets an optional `bluer` dependency, enabled by the node's `bluer` feature. The
+- `From<bluer::Error> for Error` must live next to `Error` because of the orphan rule, so
+  `utils` gets an optional `bluer` dependency, enabled by the node's `bluer` feature. The
   other conversions (`std::io::Error`, `PoisonError`, `SystemTimeError`, `num_enum`) need
   only a `std` feature.
-- `Error` implements the `embedded-io-async` error trait. The error crate is below `utils`,
-  so it depends on `embedded-io-async` directly, as the one exception to using it through
-  `utils::io`. This is acceptable because the error crate is expected to be redesigned, and
-  likely to go away, with the per-crate errors.
+- `Error` and `ErrorCode` are a module of `utils` rather than a crate of their own. They are
+  expected to go away with the per-crate errors, and a separate crate would be published
+  only to be retired soon after. Nothing depends on them without also depending on `utils`.
 - The test device data (`dm::devices::test`) goes to `node`, because it includes a
   `BasicInfoConfig` and a `BasicCommData`. The test DAC private key, which the test crypto
   setup needs, moves to `crypto`.
@@ -350,7 +348,7 @@ it checks quickly once it is in a crate of its own.
   firmware, which `utils::epoch` needs, is captured by a `build.rs` of `rs-matter-utils`.
 - **Coherence.** A crate cannot implement a trait of another crate for a type of a third
   one, nor add inherent methods to a type of another crate. The conversions from the
-  errors of `zbus` and BlueR move to the error crate, behind features of the same names.
+  errors of `zbus` and BlueR move to `utils`, behind features of the same names.
   The ones from the `domain` (mDNS) and `zeroconf` errors become plain functions used with
   `map_err`. The inherent methods of the handlers on generated types become extension
   traits (`NetworkCommissioningStatusMap` and `AttributeValuePairPush` are public, as
@@ -387,7 +385,7 @@ This step contains all the design decisions and can be reviewed on its own.
 
 ### Step 2: extract the crates, bottom up
 
-`error`, `utils`, `tlv`, `crypto`, `cert`, `pairing`; then `im-base`, `dm-base`; then
+`utils`, `tlv`, `crypto`, `cert`, `pairing`; then `im-base`, `dm-base`; then
 `dm-clusters` (with `build.rs`); then `node`, `im`, `dm`, `onboard`; the facade last.
 
 `pics` (`Matter::write_pics_json`) went to `node` rather than to `dm`: it adds methods to
@@ -422,8 +420,8 @@ What changed:
 ## 10. Expected effect
 
 An edit to `node`, `im` or `dm` no longer re-checks the generated code. #559 estimates
-single-digit seconds for such re-checks. An edit to `dm-base`, `im-base`, `tlv`, `utils` or
-`error` still re-checks the generated crate, but those crates change less often. A clean
+single-digit seconds for such re-checks. An edit to `dm-base`, `im-base`, `tlv` or `utils`
+still re-checks the generated crate, but those crates change less often. A clean
 build takes about as long as today in total, with some crates building in parallel.
 
 How to measure, before and after the split:

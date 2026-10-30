@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
         "rs-matter",
-        "rs-matter-error",
         "rs-matter-utils",
         "rs-matter-tlv",
         "rs-matter-crypto",
@@ -60,7 +59,6 @@ opt-level = 2
 [workspace.dependencies]
 # The crates of this workspace
 rs-matter = { path = "rs-matter", version = "0.4.1" }
-rs-matter-error = { path = "rs-matter-error", version = "0.4.1", default-features = false }
 rs-matter-utils = { path = "rs-matter-utils", version = "0.4.1", default-features = false }
 rs-matter-tlv = { path = "rs-matter-tlv", version = "0.4.1", default-features = false }
 rs-matter-crypto = { path = "rs-matter-crypto", version = "0.4.1", default-features = false }

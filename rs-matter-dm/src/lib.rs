@@ -36,7 +36,6 @@ use rs_matter_crypto as crypto;
 use rs_matter_crypto::group_keys;
 use rs_matter_dm_base::persist;
 use rs_matter_dm_base::{except, handler_chain_type, with};
-use rs_matter_error as error;
 #[cfg(feature = "groups")]
 use rs_matter_node::groupcast;
 use rs_matter_node::{
@@ -44,6 +43,7 @@ use rs_matter_node::{
     MatterState,
 };
 use rs_matter_tlv as tlv;
+use rs_matter_utils::error;
 
 // For the exported macros
 #[doc(hidden)]

@@ -15,8 +15,8 @@ rust-version.workspace = true
 default = ["os", "log"]
 # Umbrella set of features for typical OS-based non-baremetal deployments.
 os = ["std", "dep:if-addrs", "rs-matter-node/os"]
-std = ["alloc", "rs-matter-error/std", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-cert/std", "rs-matter-im-base/std", "rs-matter-dm-base/std", "rs-matter-dm-clusters/std", "rs-matter-node/std"]
-alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-cert/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc", "rs-matter-dm-clusters/alloc", "rs-matter-node/alloc"]
+std = ["alloc", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-cert/std", "rs-matter-im-base/std", "rs-matter-dm-base/std", "rs-matter-dm-clusters/std", "rs-matter-node/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-cert/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc", "rs-matter-dm-clusters/alloc", "rs-matter-node/alloc"]
 # The NetworkManager and wpa_supplicant Wi-Fi drivers, and the OTBR Thread driver.
 zbus = ["os", "dep:zbus", "dep:serde", "futures-lite", "uuid", "rs-matter-node/zbus"]
 # Multicast groups support.
@@ -25,11 +25,10 @@ groups = ["rs-matter-crypto/groups", "rs-matter-node/groups"]
 case-resumption = ["rs-matter-node/case-resumption"]
 # A small OTA DCL client.
 ota-dcl = ["dep:serde", "dep:serde-json-core", "heapless/serde"]
-defmt = ["dep:defmt", "heapless/defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-cert/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt", "rs-matter-dm-clusters/defmt", "rs-matter-node/defmt"]
-log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-cert/log", "rs-matter-im-base/log", "rs-matter-dm-base/log", "rs-matter-dm-clusters/log", "rs-matter-node/log"]
+defmt = ["dep:defmt", "heapless/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-cert/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt", "rs-matter-dm-clusters/defmt", "rs-matter-node/defmt"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-cert/log", "rs-matter-im-base/log", "rs-matter-dm-base/log", "rs-matter-dm-clusters/log", "rs-matter-node/log"]
 
 [dependencies]
-rs-matter-error = { workspace = true }
 rs-matter-utils = { workspace = true }
 rs-matter-tlv = { workspace = true }
 rs-matter-crypto = { workspace = true }

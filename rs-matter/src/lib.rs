@@ -53,8 +53,8 @@ pub use rs_matter_cert as cert;
 pub use rs_matter_cert::attest;
 pub use rs_matter_crypto as crypto;
 pub use rs_matter_crypto::group_keys;
-pub use rs_matter_error as error;
 pub use rs_matter_pairing as pairing;
+pub use rs_matter_utils::error;
 
 pub use rs_matter_dm_base::persist;
 pub use rs_matter_dm_base::{

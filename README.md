@@ -29,8 +29,7 @@ under a single set of paths and features:
 
 | Crate | Contents |
 |---|---|
-| `rs-matter-error` | The error type |
-| `rs-matter-utils` | Synchronization primitives, storage, timers, futures, I/O, in-place initialization |
+| `rs-matter-utils` | The error type, synchronization primitives, storage, timers, futures, I/O, in-place initialization |
 | `rs-matter-tlv` | The TLV encoding, and the `FromTLV` / `ToTLV` traits |
 | `rs-matter-crypto` | The crypto traits and backends, the group key derivation |
 | `rs-matter-cert` | Operational certificates and device attestation |

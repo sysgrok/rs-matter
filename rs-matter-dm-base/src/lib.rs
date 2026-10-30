@@ -38,7 +38,7 @@ use rs_matter_utils as utils;
 
 // Public, for the exported macros
 #[doc(hidden)]
-pub use rs_matter_error as error;
+pub use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

@@ -34,11 +34,11 @@
 
 // The crates, under the paths the generated code uses for them
 use rs_matter_dm_base as dm;
-use rs_matter_error as error;
 use rs_matter_im_base as im;
 use rs_matter_tlv as tlv;
 use rs_matter_tlv::bitflags_tlv;
 use rs_matter_utils as utils;
+use rs_matter_utils::error;
 
 /// The crates used by the generated code
 mod reexport {

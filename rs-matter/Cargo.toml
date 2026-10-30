@@ -154,10 +154,10 @@ astro-dnssd = ["os", "rs-matter-node/astro-dnssd"]
 # Prefer the Avahi and Resolved mDNS implementations over Zeroconf for production deployments, via `zbus`.
 zeroconf = ["os", "rs-matter-node/zeroconf"]
 # Enable the zBus proxies for a range of Linux dBus services used by `rs-matter` (off by default due to slow compilation).
-zbus = ["os", "rs-matter-error/zbus", "rs-matter-node/zbus", "rs-matter-dm/zbus"]
+zbus = ["os", "rs-matter-utils/zbus", "rs-matter-node/zbus", "rs-matter-dm/zbus"]
 # BLE suppport for Linux (via BlueZ).
 # Prefer the BlueZ implementation over Bluer for production deployments, via `zbus`.
-bluer = ["os", "rs-matter-error/bluer", "rs-matter-node/bluer"]
+bluer = ["os", "rs-matter-utils/bluer", "rs-matter-node/bluer"]
 # Recognizing Matter onboarding QR codes in images (via `rqrr`), for commissioners
 # that scan a device's QR code rather than being handed its payload text.
 # Requires `std`; the image *decoding* (PNG/JPEG/camera/...) is the caller's job -
@@ -172,12 +172,12 @@ pics = ["rs-matter-node/pics"]
 # Umbrella set of features for typical OS-based non-baremetal deployments.
 os = ["std", "async-io", "rs-matter-utils/os", "rs-matter-node/os", "rs-matter-dm/os"]
 # Minimal set of features for targets with support for Rust STD (narrower than `os` above).
-std = ["alloc", "rs-matter-error/std", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-cert/std", "rs-matter-pairing/std", "rs-matter-im-base/std", "rs-matter-dm-base/std", "rs-matter-dm-clusters/std", "rs-matter-node/std", "rs-matter-im/std", "rs-matter-dm/std", "rs-matter-onboard/std"]
+std = ["alloc", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-cert/std", "rs-matter-pairing/std", "rs-matter-im-base/std", "rs-matter-dm-base/std", "rs-matter-dm-clusters/std", "rs-matter-node/std", "rs-matter-im/std", "rs-matter-dm/std", "rs-matter-onboard/std"]
 # Enable backtrace capturing (useful for debugging).
-backtrace = ["rs-matter-error/backtrace"]
+backtrace = ["rs-matter-utils/backtrace"]
 # Enable the alloc feature for targets that support it.
 # In general, `rs-matter` does not use heap, so this feature enables only a few convenience features.
-alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-cert/alloc", "rs-matter-pairing/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc", "rs-matter-dm-clusters/alloc", "rs-matter-node/alloc", "rs-matter-im/alloc", "rs-matter-dm/alloc", "rs-matter-onboard/alloc"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-cert/alloc", "rs-matter-pairing/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc", "rs-matter-dm-clusters/alloc", "rs-matter-node/alloc", "rs-matter-im/alloc", "rs-matter-dm/alloc", "rs-matter-onboard/alloc"]
 # Crypto backend: Rust Crypto.
 rustcrypto = ["alloc", "rs-matter-crypto/rustcrypto"]
 # Crypto backend: OpenSSL (not usable for baremetal targets, only for OS targets with OpenSSL installed).
@@ -191,9 +191,9 @@ send-sync = ["rs-matter-utils/send-sync"]
 # TODO: We likely don't need this hidden behind a feature.
 ota-dcl = ["rs-matter-dm/ota-dcl"]
 # Enable support for `defmt` logging (for embedded targets).
-defmt = ["dep:defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-cert/defmt", "rs-matter-pairing/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt", "rs-matter-dm-clusters/defmt", "rs-matter-node/defmt", "rs-matter-im/defmt", "rs-matter-dm/defmt", "rs-matter-onboard/defmt"]
+defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-cert/defmt", "rs-matter-pairing/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt", "rs-matter-dm-clusters/defmt", "rs-matter-node/defmt", "rs-matter-im/defmt", "rs-matter-dm/defmt", "rs-matter-onboard/defmt"]
 # Enable support for `log` logging (for embedded and OS targets).
-log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-cert/log", "rs-matter-pairing/log", "rs-matter-im-base/log", "rs-matter-dm-base/log", "rs-matter-dm-clusters/log", "rs-matter-node/log", "rs-matter-im/log", "rs-matter-dm/log", "rs-matter-onboard/log"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-cert/log", "rs-matter-pairing/log", "rs-matter-im-base/log", "rs-matter-dm-base/log", "rs-matter-dm-clusters/log", "rs-matter-node/log", "rs-matter-im/log", "rs-matter-dm/log", "rs-matter-onboard/log"]
 # Enable `debug`-level logging of TLV payloads.
 # This is very verbose and should only be used for debugging.
 log-tlv-payload = ["rs-matter-node/log-tlv-payload"]
@@ -217,7 +217,6 @@ case-responder-only = ["rs-matter-node/case-responder-only"]
 async-io = ["rs-matter-node/async-io"]
 
 [dependencies]
-rs-matter-error = { workspace = true }
 rs-matter-utils = { workspace = true }
 rs-matter-tlv = { workspace = true }
 rs-matter-crypto = { workspace = true }

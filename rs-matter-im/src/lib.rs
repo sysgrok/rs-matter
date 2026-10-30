@@ -70,11 +70,11 @@ use crate::utils::timers::{Instant, Timer};
 // The dependencies, under the names the code uses for them
 use rs_matter_crypto as crypto;
 use rs_matter_dm_base::persist;
-use rs_matter_error as error;
 #[cfg(feature = "groups")]
 use rs_matter_node::groupcast;
 use rs_matter_node::{acl, dm, fabric, sc, transport, utils, Matter};
 use rs_matter_tlv as tlv;
+use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

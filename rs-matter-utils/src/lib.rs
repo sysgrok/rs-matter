@@ -15,8 +15,8 @@
  *    limitations under the License.
  */
 
-//! Utilities used across `rs-matter`: synchronization primitives, storage,
-//! timers, futures, I/O and in-place initialization.
+//! Utilities used across `rs-matter`: the error type, synchronization primitives,
+//! storage, timers, futures, I/O and in-place initialization.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(async_fn_in_trait)]
@@ -25,9 +25,6 @@
 // `cargo llvm-cov` sets `coverage_nightly` when it runs on a nightly toolchain;
 // the test modules are then excluded from the coverage report
 #![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
-
-// The dependencies, under the names the code uses for them
-use rs_matter_error as error;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -39,6 +36,7 @@ pub mod bitflags;
 pub mod cell;
 pub mod codec;
 pub mod epoch;
+pub mod error;
 pub mod futures;
 pub mod init;
 pub mod io;

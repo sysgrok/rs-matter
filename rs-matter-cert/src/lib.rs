@@ -42,9 +42,9 @@ use crate::utils::storage::String;
 
 // The dependencies, under the names the code uses for them
 use rs_matter_crypto as crypto;
-use rs_matter_error as error;
 use rs_matter_tlv as tlv;
 use rs_matter_utils as utils;
+use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

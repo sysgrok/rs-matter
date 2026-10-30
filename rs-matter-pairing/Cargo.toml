@@ -13,18 +13,17 @@ rust-version.workspace = true
 
 [features]
 default = ["std", "log"]
-std = ["alloc", "rs-matter-error/std", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std"]
-alloc = ["defmt?/alloc", "rs-matter-error/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc"]
+std = ["alloc", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc"]
 # Recognizing Matter onboarding QR codes in images (via `rqrr`), for commissioners
 # that scan a device's QR code rather than being handed its payload text.
 # Requires `std`; the image *decoding* (PNG/JPEG/camera/...) is the caller's job -
 # this only consumes 8-bit greyscale pixels. See `qr::scan`.
 qr-scan = ["std", "dep:rqrr"]
-defmt = ["dep:defmt", "rs-matter-error/defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt"]
-log = ["dep:log", "rs-matter-error/log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log"]
+defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log"]
 
 [dependencies]
-rs-matter-error = { workspace = true }
 rs-matter-utils = { workspace = true }
 rs-matter-tlv = { workspace = true }
 rs-matter-crypto = { workspace = true }
