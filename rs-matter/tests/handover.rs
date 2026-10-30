@@ -53,6 +53,7 @@ use rs_matter::onboard::{CommissionOptions, Commissioner};
 use rs_matter::persist::{KvBlobStoreAccess, FABRIC_KEYS_START, NETWORKS_KEY};
 use rs_matter::respond::DefaultResponder;
 use rs_matter::sc::pase::MAX_COMM_WINDOW_TIMEOUT_SECS;
+use rs_matter::sc::ExchangeInitiator as _;
 use rs_matter::tlv::{FromTLV, TLVElement, TLVTag, ToTLV};
 use rs_matter::transport::exchange::{Exchange, MatterBuffers};
 use rs_matter::transport::network::{Address, NoNetwork, SocketAddr, SocketAddrV6};

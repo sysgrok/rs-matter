@@ -498,13 +498,13 @@ impl<I: OtaImagesRegistry> ClusterAsyncHandler for OtaProviderHandler<'_, I> {
 ///
 /// Given the exchange handler for the rest of your protocols (e.g. the default
 /// Interaction Model + Secure Channel chain), add BDX with
-/// [`ExchangeHandler::chain`](crate::transport::exchange::ExchangeHandler::chain):
+/// `ChainedExchangeHandler::chain`:
 ///
 /// ```ignore
-/// use rs_matter_node::bdx::{Bdx, PROTO_ID_BDX};
+/// use rs_matter_bdx::{Bdx, PROTO_ID_BDX};
 /// use rs_matter_dm::clusters::ota_prov::BdxBuffer;
-/// use rs_matter_im::respond::Responder;
-/// use rs_matter_node::utils::storage::pooled::PooledBuffers;
+/// use rs_matter_utils::storage::pooled::PooledBuffers;
+/// use rs_matter_respond::Responder;
 ///
 /// // One staging buffer per concurrent download (here: two).
 /// let buffers = PooledBuffers::<BdxBuffer, 2>::new();

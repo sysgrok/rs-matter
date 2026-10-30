@@ -32,10 +32,10 @@ use crate::group_keys::KeySet;
 use crate::persist::{
     load_logged, KvBlobStore, KvBlobStoreAccess, Persist, FABRIC_KEYS_START, NEXT_FABRIC_INDEX_KEY,
 };
+use crate::service::MatterLocalService;
 #[cfg(feature = "groups")]
 use crate::tlv::Skippable;
 use crate::tlv::{FromTLV, TLVElement, ToTLV};
-use crate::transport::network::MatterLocalService;
 use crate::utils::init::{init, Init, InitMaybeUninit, IntoFallibleInit};
 use crate::utils::storage::{String, Vec};
 
@@ -217,7 +217,7 @@ mod groups {
     }
 
     impl Groups {
-        pub(crate) const fn new() -> Self {
+        pub const fn new() -> Self {
             Self {
                 key_sets: Vec::new(),
                 key_map: Vec::new(),
@@ -225,7 +225,7 @@ mod groups {
             }
         }
 
-        pub(crate) fn init() -> impl Init<Self> {
+        pub fn init() -> impl Init<Self> {
             init!(Self {
                 key_sets <- Vec::init(),
                 key_map <- Vec::init(),
@@ -1177,7 +1177,7 @@ impl Fabrics {
     }
 
     /// Remove all fabrics
-    pub(crate) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.fabrics.clear();
         self.unloaded = [0; 32];
         self.next_fab_idx = NonZeroU8::MIN;
@@ -1188,7 +1188,7 @@ impl Fabrics {
     /// # Arguments
     /// - `store`: the BLOB store to remove the fabrics from
     /// - `buf`: a temporary buffer to use for removing the fabrics
-    pub(crate) fn reset_persist<S: KvBlobStore>(
+    pub fn reset_persist<S: KvBlobStore>(
         &mut self,
         mut store: S,
         buf: &mut [u8],
@@ -1215,7 +1215,7 @@ impl Fabrics {
     /// # Arguments
     /// - `store`: the BLOB store to load the fabrics from
     /// - `buf`: a temporary buffer to use for loading the fabrics
-    pub(crate) fn load_persist<S: KvBlobStore>(
+    pub fn load_persist<S: KvBlobStore>(
         &mut self,
         mut store: S,
         buf: &mut [u8],
@@ -1250,7 +1250,7 @@ impl Fabrics {
     /// Load the fabric with index `fab_idx` from `store`, if persisted.
     ///
     /// A fabric that cannot be loaded is skipped, with its index kept reserved.
-    pub(crate) fn add_load<S: KvBlobStore>(
+    pub fn add_load<S: KvBlobStore>(
         &mut self,
         fab_idx: u8,
         mut store: S,
@@ -1598,7 +1598,7 @@ pub(crate) mod tests {
     use core::mem::MaybeUninit;
     use core::num::NonZeroU8;
 
-    use crate::acl::{AccessReq, Accessor, AccessorSubjects, AclEntry, AuthMode, Target};
+    use crate::acl::{AccessReq, AccessorSubjects, AclEntry, AuthMode, SubjectDescriptor, Target};
     use crate::cert::gen::{CertGenerator, CertType, IssuerDN, SubjectDN, Validity, VALID_FOREVER};
     use crate::cert::{CertRef, MAX_CERT_TLV_AND_ASN1_LEN};
     use crate::crypto::test_only_crypto;
@@ -1609,13 +1609,13 @@ pub(crate) mod tests {
     };
     use crate::dm::{Access, Privilege};
     use crate::error::{Error, ErrorCode};
-    use crate::im::encoding::GenericPath;
+    use crate::im::GenericPath;
     use crate::persist::{
         KvBlobStore, KvBlobStoreAccess, MemKv, MemKvBlobStore, FABRIC_KEYS_START,
         NEXT_FABRIC_INDEX_KEY,
     };
+    use crate::service::MatterLocalService;
     use crate::tlv::TLVElement;
-    use crate::transport::network::MatterLocalService;
     use crate::utils::init::{Init, InitMaybeUninit, IntoFallibleInit};
 
     use super::{
@@ -2582,13 +2582,11 @@ pub(crate) mod tests {
         endpoint: u16,
         aux_acl_enabled: bool,
     ) -> bool {
-        let matter = crate::test::test_matter();
-        let accessor = Accessor::new(
+        let accessor = SubjectDescriptor::new(
             fab_idx,
             aux_acl_enabled,
             AccessorSubjects::new(subject),
             auth_mode,
-            &matter,
         );
         let mut req = AccessReq::new(
             &accessor,

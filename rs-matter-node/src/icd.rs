@@ -31,8 +31,8 @@ pub enum IcdOperatingMode {
 /// parameters of its CASE / PASE handshakes - and what its subscriptions are
 /// paced by.
 ///
-/// The ICD Management handler keeps [`Matter`](crate::Matter) supplied with it
-/// (see [`Matter::icd_advertisement`](crate::Matter::icd_advertisement)); a node
+/// The ICD Management handler keeps `Matter` supplied with it
+/// (see `Matter::icd_advertisement`); a node
 /// that is not an ICD advertises none.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

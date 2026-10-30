@@ -65,6 +65,7 @@ use rs_matter::onboard::noc::NocGenerator;
 use rs_matter::persist::{DummyKvBlobStore, FABRIC_KEYS_START};
 use rs_matter::respond::{DefaultResponder, Responder};
 use rs_matter::sc::case::CaseInitiator;
+use rs_matter::sc::ExchangeInitiator as _;
 use rs_matter::sc::SecureChannel;
 use rs_matter::transport::exchange::{Exchange, MatterBuffers};
 use rs_matter::transport::network::{Address, NoNetwork};

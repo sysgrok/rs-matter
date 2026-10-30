@@ -92,6 +92,7 @@ use rs_matter::persist::DummyKvBlobStore;
 use rs_matter::respond::DefaultResponder;
 use rs_matter::sc::case::CaseInitiator;
 use rs_matter::sc::pase::MAX_COMM_WINDOW_TIMEOUT_SECS;
+use rs_matter::sc::ExchangeInitiator as _;
 use rs_matter::tlv::{Nullable, OctetStr, TLVTag, TLVWrite};
 use rs_matter::transport::exchange::{Exchange, MatterBuffers};
 use rs_matter::transport::network::{Address, NoNetwork, SocketAddr, SocketAddrV6};

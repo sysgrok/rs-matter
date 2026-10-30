@@ -11,8 +11,12 @@ members = [
         "rs-matter-dm-base",
         "rs-matter-dm-clusters",
         "rs-matter-node",
+        "rs-matter-transport",
+        "rs-matter-sc",
+        "rs-matter-bdx",
         "rs-matter-im",
         "rs-matter-dm",
+        "rs-matter-respond",
         "rs-matter-onboard",
         "rs-matter-macros",
         "rs-matter-codegen",
@@ -68,8 +72,12 @@ rs-matter-im-base = { path = "rs-matter-im-base", version = "0.4.1", default-fea
 rs-matter-dm-base = { path = "rs-matter-dm-base", version = "0.4.1", default-features = false }
 rs-matter-dm-clusters = { path = "rs-matter-dm-clusters", version = "0.4.1", default-features = false }
 rs-matter-node = { path = "rs-matter-node", version = "0.4.1", default-features = false }
+rs-matter-transport = { path = "rs-matter-transport", version = "0.4.1", default-features = false }
+rs-matter-sc = { path = "rs-matter-sc", version = "0.4.1", default-features = false }
+rs-matter-bdx = { path = "rs-matter-bdx", version = "0.4.1", default-features = false }
 rs-matter-im = { path = "rs-matter-im", version = "0.4.1", default-features = false }
 rs-matter-dm = { path = "rs-matter-dm", version = "0.4.1", default-features = false }
+rs-matter-respond = { path = "rs-matter-respond", version = "0.4.1", default-features = false }
 rs-matter-onboard = { path = "rs-matter-onboard", version = "0.4.1", default-features = false }
 rs-matter-macros = { path = "rs-matter-macros", version = "0.4.1" }
 rs-matter-codegen = { path = "rs-matter-codegen", version = "0.4.1" }

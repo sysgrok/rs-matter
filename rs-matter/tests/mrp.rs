@@ -65,6 +65,7 @@ use rs_matter::im::{
 };
 use rs_matter::persist::DummyKvBlobStore;
 use rs_matter::respond::{ExchangeHandler, Responder};
+use rs_matter::sc::ExchangeInitiator as _;
 use rs_matter::sc::{OpCode as ScOpCode, PROTO_ID_SECURE_CHANNEL};
 use rs_matter::transport::exchange::{Exchange, MatterBuffers, MessageMeta};
 use rs_matter::transport::network::{

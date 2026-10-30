@@ -30,8 +30,6 @@ Out of scope:
 
 - Error handling. `Error` and `ErrorCode` stay as they are, shared by all crates. Per-crate
   error types are a separate topic.
-- Splitting transport, secure channel, sessions, fabrics, ACL, fail-safe and BDX from each
-  other (see section 7).
 - Behaviour changes. The split moves code and changes some APIs; it does not change what the
   stack does on the wire.
 - Separate versions per crate, at least initially. All `rs-matter-*` crates keep sharing one
@@ -189,7 +187,7 @@ counts are hand-written lines in the current code.
 
 | Crate | Contents | Lines | Depends on | Used by |
 |---|---|---|---|---|
-| `rs-matter-utils` | `utils`, without the zbus proxies; `Error`, `ErrorCode` (unchanged) as its `error` module | 8.5K | - | all |
+| `rs-matter-utils` | `utils`, with the zbus proxies behind the `zbus` feature; `Error`, `ErrorCode` (unchanged) as its `error` module | 16K | - | all |
 | `rs-matter-tlv` | TLV | 9.1K | - | all below |
 | `rs-matter-crypto` | `Crypto` traits, canonical types, rand, backends (by feature), group key derivation | 6.7K | tlv | cert, pairing, dm-base, node, im, dm, onboard |
 | `rs-matter-cert` | operational certificates, x509 and CSR, attestation (DAC chain, CD, trust store), `DeviceAttestation` | 7.7K | tlv, crypto | node, dm, onboard |
@@ -197,16 +195,21 @@ counts are hand-written lines in the current code.
 | `rs-matter-im-base` | IM message encoding, protocol constants and opcodes, IDs, `ImTransaction` | 6.9K | tlv | dm-base, dm-clusters, node, im, dm, onboard |
 | `rs-matter-dm-base` | data model metadata (`Node`, `Endpoint`, `Cluster`, ...), access, dataver, `Handler` / `AsyncHandler`, context traits, `Reply`, change notifiers, event writer, `LifecycleOp`, `ImStats`, `ExchangeId`, persistence traits | 6.5K | tlv, im-base, crypto | dm-clusters, node, im, dm, onboard |
 | `rs-matter-dm-clusters` | generated: types, builders, metadata, handler traits, adaptors, client views; owns the codegen `build.rs` | (775K generated) | tlv, im-base, dm-base | dm, onboard |
-| `rs-matter-node` | `Matter` and the node state, transport (exchange, session, MRP, UDP, TCP, BTP, mDNS, OS backends), secure channel, fabrics, ACL, fail-safe, handover, BDX, OTA image, the IM client over `Exchange`, the PICS JSON output | 55K | tlv, crypto, cert, pairing, im-base, dm-base | im, dm, onboard |
-| `rs-matter-im` | the IM engine: `InteractionModel`, subscriptions, event queue, invoker, path expansion, busy handling, the responders, the context implementations | 12K | tlv, crypto, im-base, dm-base, node | rs-matter |
-| `rs-matter-dm` | all cluster handlers (root endpoint and application), the root endpoint composition, the network commissioning drivers (including NetworkManager, wpa_supplicant and OTBR), `TimeSyncClient` | 60K | tlv, crypto, cert, im-base, dm-base, dm-clusters, node | rs-matter |
-| `rs-matter-onboard` | the commissioner | 1.4K | tlv, crypto, cert, im-base, dm-base, dm-clusters, node | rs-matter |
+| `rs-matter-node` | the state of the node that does not depend on how it talks to others: fabrics, ACL entries and matching, fail-safe, basic information, networks, clock, ICD advertisement, handover; `SessionMode` and the session sizing; `MatterLocalService`; the test device | 10K | tlv, crypto, cert, pairing, im-base, dm-base | transport, sc, im, dm |
+| `rs-matter-transport` | `Matter` and `MatterState`, transport (exchange, session, MRP, UDP, TCP, BTP, mDNS, OS backends), `MessageMeta`, the Secure Channel message types and the BDX identifiers, the commissioning window and the CASE resumption cache, `Accessor`, the IM client over `Exchange`, the Groupcast testing bridge, the PICS JSON output | 32K | tlv, crypto, cert, pairing, im-base, dm-base, node | sc, bdx, im, dm, respond, onboard |
+| `rs-matter-sc` | the Secure Channel protocol: PASE and CASE as initiator and responder, SPAKE2+, Check-In, MCSP; `ExchangeInitiator` | 7.2K | tlv, crypto, cert, dm-base, node, transport | im, dm, respond, onboard |
+| `rs-matter-bdx` | the BDX protocol | 2.5K | transport | dm, respond |
+| `rs-matter-im` | the IM engine: `InteractionModel`, subscriptions, event queue, invoker, path expansion, busy handling, the context implementations | 12K | tlv, crypto, im-base, dm-base, node, transport, sc | respond |
+| `rs-matter-dm` | all cluster handlers (root endpoint and application), the root endpoint composition, the network commissioning drivers (including NetworkManager, wpa_supplicant and OTBR), `TimeSyncClient`, the OTA image | 60K | tlv, crypto, cert, im-base, dm-base, dm-clusters, node, transport, sc, bdx | rs-matter |
+| `rs-matter-respond` | `ExchangeHandler`, `ChainedExchangeHandler`, the responders | 0.8K | crypto, dm-base, transport, sc, bdx, im | rs-matter |
+| `rs-matter-onboard` | the commissioner | 1.4K | tlv, crypto, cert, im-base, dm-base, dm-clusters, transport, sc | rs-matter |
 | `rs-matter` | facade; re-exports the crates above under the existing paths | - | all | applications |
 
 `rs-matter-macros` and `rs-matter-codegen` stay as they are.
 
-Only `rs-matter-dm` and `rs-matter-onboard` depend on the generated crate. `rs-matter-node`
-and `rs-matter-im` type-check in parallel with it, and an edit to them never re-checks it.
+Only `rs-matter-dm` and `rs-matter-onboard` depend on the generated crate. All the crates
+from `rs-matter-node` to `rs-matter-im` type-check in parallel with it, and an edit to them
+never re-checks it.
 
 Notes:
 
@@ -277,10 +280,7 @@ The data model types stop depending on code above them:
 
 Smaller items:
 
-- `MessageMeta` moves to the IM encoding; `IMBuffer` and its size constant move to the data
-  model types.
-- The `ExchangeHandler` trait stays on the node side, because the secure channel and BDX
-  implement it. The responders that combine IM, secure channel and BDX move to `im`.
+- `IMBuffer` and its size constant move to the data model types.
 - The event TLV writer and `EVENT_DATA_TAG` move to the data model types; the event queue
   stays in `im`. `ImStats` and `DeviceLoad` move to the data model types.
 - `From<bluer::Error> for Error` must live next to `Error` because of the orphan rule, so
@@ -297,21 +297,103 @@ Smaller items:
   (`dm::clusters::app::test_util`). `dm` gets `im` as a dev-dependency for this. There is no
   cycle, because `im` does not depend on `dm`.
 
-## 7. What is not split
+## 7. The node, the transport and the protocols
 
-Transport, secure channel, sessions, fabrics, ACL, fail-safe and BDX form one dependency
-cycle around `Matter`. `Exchange` holds `&Matter`, and `Matter` holds the transport and all
-session, fabric, fail-safe and PASE state. `Exchange::initiate` runs the CASE initiator. The
-secure channel talks over exchanges and writes the session and fabric tables. The OTA and
-Diagnostic Logs clusters use BDX. Separating these needs an `Exchange` that does not know
-`Matter`, which is a redesign that #559 does not need. All of this code is hand-written, so
-it checks quickly once it is in a crate of its own.
+The first version of the split kept the transport, the secure channel, the sessions, the
+fabrics, the ACL, the fail-safe and BDX in one crate. They are now separate crates, which
+depend on each other in this order:
+
+```text
+node <- transport <- sc, bdx <- im, dm, onboard <- respond (needs sc, bdx, im)
+```
+
+This is about separation of concerns rather than about check times: all of this code is
+hand-written and checks quickly in any case.
+
+### Where `Matter` and the sessions live
+
+`Exchange` holds a `&Matter`, and so does everything built on it, so `Matter` cannot live above
+the crate of `Exchange`. `Matter`, `MatterState` and `Sessions` are in `transport`, and
+`MatterState` stays behind the one lock of `Matter`.
+
+Two other arrangements were considered and rejected:
+
+- **`Sessions` behind a lock of its own.** At least 15 locked sections need the sessions
+  together with other state, and they rely on seeing the two consistently: the receive path
+  decodes a message with the fabric table, `ExchangeIdExt::with_state` checks that the session
+  exists and then runs a closure over the rest of the state, and the fail-safe rolls back the
+  fabric and the PASE sessions in one step. Each of these would need a lock order, or a
+  critical section split in two.
+- **A `SessionsProvider` trait implemented by `MatterState`.** `Exchange` would need to be
+  generic over it or hold a `dyn`, and the receive path needs the fabrics too, so the trait
+  would end up exposing most of the state anyway.
+
+`Matter` cannot move above `transport` for the same reason as `Exchange`: `Accessor`,
+`InteractionModel` and the system cluster handlers hold a `&Matter` as well.
+
+### What `node` holds besides the node state
+
+`transport` depends on `node`, so the few items that the node state uses from the sessions and
+from mDNS are in `node`:
+
+- `SessionMode` and `NocCatIds`, for the fail-safe and the ACL. `Session` and `Sessions` stay in
+  `transport`.
+- `MAX_SESSIONS` and `CASE_SESSIONS_PER_FABRIC`, for the capability minima of the basic
+  information.
+- `MatterLocalService`, which a fabric returns. Its encoding into an mDNS service stays in
+  `transport`, as the `MatterLocalServiceExt` trait.
+
+The modules `im`, `dm` and `utils` are gone from `node`. It uses `im-base`, `dm-base` and `utils`
+directly. The test device moved to `test_device`, because it needs `BasicInfoConfig`, and the facade
+keeps its path as `dm::devices::test`.
+
+### What `transport` holds from the protocols
+
+`transport` does not depend on `sc` and `bdx`, so what it needs from them is in its `sc` and `bdx`
+modules, which `rs-matter-sc` and `rs-matter-bdx` re-export. The paths through the facade do not
+change. A base crate of their own (like `im-base` for the Interaction Model) would contain only
+these, so there are none:
+
+- The Secure Channel message types (`OpCode`, `SCStatusCodes`, `GeneralCode`, `StatusReport`,
+  `SessionParameters`, `sc_write`). The transport sends and parses standalone acknowledgements and
+  the `Busy` and `CloseSession` status reports, and `SessionParameters` configures a session.
+- The BDX protocol ID and opcodes, which the transport logs.
+- `Pase` with the commissioning window, and `ResumableSessions`, because they are fields of
+  `MatterState`. Of SPAKE2+, only the verifier data of the window is here: the password or the
+  verifier, the salt and the iteration count. The computations are in `rs-matter-sc`.
+
+`MessageMeta` stays in `exchange.rs`, where it has always been.
+
+### The cuts in the code
+
+- **`FailSafe`** no longer sees `Sessions` and `Pase`. `expire` and `check_failsafe_timeout` take a
+  closure that removes the PASE sessions instead, and the caller decides which session to keep.
+  `arm` takes whether a commissioning window is open.
+- **The ACL** is split in two. `node` has `SubjectDescriptor` (who is asking) and `AccessReq`,
+  which are checked against a `Fabrics`, and `transport` has `Accessor`, which adds the `Matter`
+  that holds the `Fabrics`. `accessor.allow(&req)` replaces `req.allow()`. There is no dynamic
+  dispatch in this.
+- **`Exchange::initiate`, `initiate_with_transport` and `initiate_pase`** run the CASE and PASE
+  initiators, so they move to `sc`, as the `ExchangeInitiator` trait. Calls stay the same once
+  the trait is imported. The rest of `Exchange::initiate_*` stays in `transport`. This is why
+  `im`, which initiates CASE to subscribers, depends on `sc`.
+- **`ExchangeHandler`** moves to `respond`, together with `ChainedExchangeHandler`. It is
+  implemented there for the handlers of the crates below, each by forwarding to a `handle` method
+  of the handler. So `sc`, `bdx` and `im` do not know the trait.
+- **The IM client** stays in `transport` rather than becoming a crate of its own. The generated
+  clients need `Exchange` to implement `ImTransaction`. That trait is in `im-base`, so the
+  orphan rule requires the implementation to be in the crate of `Exchange`.
+
+The tests of the node state no longer use `Matter`. They check the ACL against a `Fabrics`, and
+the fail-safe with a closure and a flag. That `Sessions::remove_pase` keeps the triggering session was
+already tested in `transport`.
 
 ## 8. Mechanics
 
 - **Features.** Each crate declares only the features it uses. `defmt` and `log` go on all
   crates. `send-sync` goes on `utils`, and Cargo's feature unification enables it
-  everywhere. The sizing features go on `node`, except `kv-blob-store-*` and
+  everywhere. The sizing features go on `node`, except those of the exchanges, the BTP
+  sessions and the resolve candidates, which go on `transport`, and `kv-blob-store-*` and
   `large-buffers`, which go on `dm-base`. The crypto backends go on `crypto`. A feature of
   a crate is forwarded to the crates below it which have a feature of the same name. The
   facade forwards all current features, so existing `Cargo.toml` files keep working;
@@ -328,9 +410,9 @@ it checks quickly once it is in a crate of its own.
   `crate::tlv::` paths become `crate::`. Each crate imports its dependencies at its root
   under the names the code already uses (`use rs_matter_tlv as tlv;`), so the
   `crate::tlv::...` paths elsewhere do not change. Where a former module is split across
-  crates, the crate above has a small module that puts the parts together: the `im`, `dm`
-  and `utils` modules of `rs-matter-node` add the IM client, the test device and the zbus
-  proxies to the re-exported base crates.
+  crates, the crate above has a small module that puts the parts together: the `im` module
+  of `rs-matter-transport` adds the IM client to the encoding of `rs-matter-im-base`, and its
+  `sc` and `bdx` modules are extended by `rs-matter-sc` and `rs-matter-bdx`.
 - **Logging macros.** Each crate gets its own copy of `fmt.rs`. A `#[macro_export]` macro
   evaluates `cfg(feature = ...)` in the crate that calls it, so one copy cannot serve all
   crates.
@@ -358,7 +440,7 @@ it checks quickly once it is in a crate of its own.
   (a `Matter` of the test device, the test fabric indices, an ICAC minted with
   `CertGenerator`). The handlers' tests use the IM engine's event queue through a
   dev-dependency of `rs-matter-dm` on `rs-matter-im`, and the `pics` test of
-  `rs-matter-node` uses the generated Identify metadata through a dev-dependency on
+  `rs-matter-transport` uses the generated Identify metadata through a dev-dependency on
   `rs-matter-dm-clusters`; neither is a cycle.
 - **Exported macros.** The root endpoint macros of `rs-matter-dm` expand to
   `$crate::dm::...` paths, so that crate has a hidden public `dm` module that puts the
@@ -388,7 +470,7 @@ This step contains all the design decisions and can be reviewed on its own.
 `utils`, `tlv`, `crypto`, `cert`, `pairing`; then `im-base`, `dm-base`; then
 `dm-clusters` (with `build.rs`); then `node`, `im`, `dm`, `onboard`; the facade last.
 
-`pics` (`Matter::write_pics_json`) went to `node` rather than to `dm`: it adds methods to
+`pics` (`Matter::write_pics_json`) went to `transport` rather than to `dm`: it adds methods to
 `Matter` and uses only the node and the data model types.
 
 ### Step 3: tooling and measurement
@@ -405,8 +487,8 @@ What changed:
   binaries, the code generator and the macros, which have steps of their own. It passes the
   features of `rs-matter` (`--features rs-matter/<feature>`), which forwards them to the
   other crates. Miri runs the same unit tests as before, now named by crate: those of
-  `utils`, `tlv`, `dm-base` (without the file I/O of `persist`), `im` (without the
-  responders), `dm`, and the IM client and the transport of `node`.
+  `utils`, `tlv`, `dm-base` (without the file I/O of `persist`), `im`, `dm`, the basic
+  information and the clock of `node`, and the IM client and the transport of `transport`.
 - **Coverage.** Measured over the workspace in the same way. `xtask coverage` groups the
   files by crate and module (`node/transport`, `dm/clusters`, ...), and the report uses
   depth 2, which gives about the rows of depth 1 before the split.
@@ -416,6 +498,13 @@ What changed:
   have to be published.
 - **`bloat-check`** depends on the facade, as before; its lockfile gains the new crates.
 - **README.** A section lists the crates.
+
+### Step 4: split the node
+
+The split of section 7: first `node` into `node`, `transport`, `sc` and `bdx`, and the responders
+out of `im` into `respond`. `Matter` stays in `transport` for now. Whether it can move to
+`rs-matter`, for example with an intermediate type in `transport` under a different name, is an
+open question.
 
 ## 10. Expected effect
 
@@ -481,6 +570,33 @@ that uses them, and LTO does not merge the identical copies it does not inline. 
 code folding in the linker (`-C link-arg=--icf=all` with `lld`) could remove those copies;
 this was not tried.
 
+### After the split of the node
+
+The same measurements, after step 4. This split was not expected to change the check times much,
+and it does not:
+
+| Edited file in | After the first split | After step 4 |
+|---|---|---|
+| `node` (`fabric.rs`) | 5.9 / 9.2 / 8.9 | 5.0 / 9.1 / 6.7 |
+| `transport` (`transport.rs`) | - | 4.8 / 7.0 / 7.0 |
+| `transport` (`session.rs`) | - | 5.7 / 6.9 / 7.1 |
+| `sc` (`case/responder.rs`) | - | 4.7 / 5.8 / 5.7 |
+| `bdx` (`read.rs`) | - | 5.1 / 6.1 / 6.1 |
+| `im` (`subscriptions.rs`) | 4.8 / 4.7 / 4.7 | 3.6 / 4.7 / 4.8 |
+| `respond` (`lib.rs`) | - | 3.2 / 3.3 / 3.9 |
+| `dm` (`clusters/app/on_off.rs`) | 4.9 / 6.3 / 6.1 | 5.2 / 5.7 / 5.7 |
+| `dm-base` (`cluster.rs`) | 46.4 / 48.4 / 49.4 | 44.3 / 44.7 / 43.0 |
+| `tlv` (`read.rs`) | 46.5 / 43.1 / 45.1 | 43.8 / 47.9 / 51.9 |
+| nothing (no-op check) | 0.3 | 0.3 |
+
+Flash: `.text` of `bloat-check`, in bytes:
+
+| Target | After the first split, with `error` in `utils` | After step 4 |
+|---|---|---|
+| thumbv6m | 308,384 | 308,260 (-124) |
+| thumbv7em | 289,828 | 289,704 (-124) |
+| riscv32imac | 386,688 | 387,278 (+590) |
+
 ## 11. Possible follow-ups
 
 - **Split the generated crate into shared, server and client parts.** Shares of the
@@ -492,8 +608,8 @@ this was not tried.
   `dm` uses two generated clients. The generated event helpers (`<Event>::emit_for`) would
   need to move to the server part as an extension trait or free functions.
 - **Remove `crypto`'s use of `tlv`** (see section 5).
-- **Move the OS backends** (zbus proxies, BlueZ and bluer, Avahi, systemd-resolved,
-  zeroconf, astro-dnssd; about 12K lines) to a crate above `node`.
+- **Move the OS backends** (BlueZ and bluer, Avahi, systemd-resolved, zeroconf, astro-dnssd;
+  about 5K lines) out of `transport`, and the zbus proxies out of `utils`.
 - **An `ImInitiator` trait**, so that the WebRTC Transport Provider handler no longer needs
   `&Matter`.
 - **Per-crate error types** (a separate issue).

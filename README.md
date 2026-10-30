@@ -37,9 +37,13 @@ under a single set of paths and features:
 | `rs-matter-im-base` | The Interaction Model encoding |
 | `rs-matter-dm-base` | The Data Model types: metadata, handler traits, persistence traits |
 | `rs-matter-dm-clusters` | The cluster types, handler traits and clients generated from the Matter IDL |
-| `rs-matter-node` | `Matter`, the transport, the secure channel, the fabrics, BDX, the IM client |
+| `rs-matter-node` | The state of the node: the fabrics, the ACL, the fail-safe, the basic information settings |
+| `rs-matter-transport` | `Matter`, the transport (exchanges, sessions, MRP, UDP, TCP, BTP, mDNS), the IM client |
+| `rs-matter-sc` | The Secure Channel protocol: PASE, CASE, Check-In |
+| `rs-matter-bdx` | The Bulk Data Exchange protocol |
 | `rs-matter-im` | The Interaction Model engine |
 | `rs-matter-dm` | The cluster handlers and the root endpoint |
+| `rs-matter-respond` | The responders of the incoming exchanges |
 | `rs-matter-onboard` | The commissioner |
 
 The split keeps the large generated code in a crate of its own, so that changes to the other crates are
@@ -334,7 +338,7 @@ These days mDNS is still a PITA especially on Windows, but not only.
 - Three well-supported ones - `avahi`, `resolve` and `builtin` -
 for production use-cases on embedded MCUs and embedded Linux;
 - ...as well as two legacy ones - `zeroconf` and `astro-dnssd` - which are kept around
-for compatibility with Windows and MacOSX; look inside `rs-matter-node/src/transport/network/mdns` for more details on those.
+for compatibility with Windows and MacOSX; look inside `rs-matter-transport/src/transport/network/mdns` for more details on those.
 
 The TL;DR is, rather than building with `--features zeroconf` everywhere, you can try:
 - On Linux: all of the above, but `--features avahi` and `--features resolve` are your best bet in production;

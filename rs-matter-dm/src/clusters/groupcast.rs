@@ -223,7 +223,7 @@ impl<'a> GroupcastHandler<'a> {
         let mut req = AccessReq::new(&accessor, path, Access::WRITE, &[]);
         req.set_target_perms(Access::WRITE | Access::NEED_ADMIN);
 
-        Ok(req.allow())
+        Ok(accessor.allow(&req))
     }
 
     /// The node ID of the invoking peer (for the `AuxiliaryAccessUpdated`

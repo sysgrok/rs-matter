@@ -23,8 +23,9 @@ send-sync = []
 backtrace = []
 # Conversion from the errors of BlueR.
 bluer = ["std", "dep:bluer"]
-# Conversion from the errors of zbus.
-zbus = ["std", "dep:zbus"]
+# Conversion from the errors of zbus, and the zbus proxies for a range of Linux D-Bus services
+# used by `rs-matter` (off by default due to slow compilation).
+zbus = ["std", "dep:zbus", "dep:serde"]
 defmt = ["dep:defmt", "heapless/defmt", "embassy-time/defmt"]
 log = ["dep:log", "embassy-time/log"]
 
@@ -41,6 +42,7 @@ pinned-init = { workspace = true }
 log = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 zbus = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { workspace = true, optional = true }

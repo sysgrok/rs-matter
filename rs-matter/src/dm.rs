@@ -22,6 +22,13 @@
 //! The Interaction Model engine that drives reads, writes, subscriptions and
 //! invokes against this data model lives in [`crate::im`].
 
-pub use rs_matter_node::dm::*;
+pub use rs_matter_dm_base::*;
+
+/// The device types, and the test device.
+pub mod devices {
+    pub use rs_matter_dm_base::devices::*;
+
+    pub use rs_matter_node::test_device as test;
+}
 
 pub use rs_matter_dm::{clusters, endpoints, networks};

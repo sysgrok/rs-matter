@@ -34,7 +34,7 @@
 //!     minted once offline (typically on an HSM) and the ICAC at
 //!     factory provisioning time. The commissioner only needs the ICAC
 //!     private key + the RCAC and ICAC TLV certs at runtime.
-//!   - Fabric install — i.e. [`rs_matter_node::fabric::Fabrics::add`] with the
+//!   - Fabric install — i.e. `Fabrics::add` with the
 //!     controller's NOC, the RCAC/ICAC chain and an IPK. The caller
 //!     does this once before running any commissioning, then reuses
 //!     the resulting `fab_idx` for every device.
@@ -88,8 +88,11 @@ use rs_matter_dm_clusters::operational_credentials::{
 // The dependencies, under the names the code uses for them
 use rs_matter_cert as cert;
 use rs_matter_crypto as crypto;
-use rs_matter_node::{dm, transport, Matter};
+use rs_matter_dm_base as dm;
+use rs_matter_sc::ExchangeInitiator as _;
 use rs_matter_tlv as tlv;
+use rs_matter_transport as transport;
+use rs_matter_transport::Matter;
 use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]
@@ -175,7 +178,7 @@ pub struct CommissionResult {
 ///
 /// **The controller's fabric is expected to already be in
 /// `matter.state.fabrics`** at the given `fab_idx` — the caller installs
-/// it once via [`rs_matter_node::fabric::Fabrics::add`] before constructing any
+/// it once via `Fabrics::add` before constructing any
 /// commissioner. A single `Commissioner` instance can then be reused to
 /// commission any number of devices onto that fabric.
 ///

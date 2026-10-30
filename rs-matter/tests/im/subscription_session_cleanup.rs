@@ -28,6 +28,7 @@ use rs_matter::im::client::{ImClient, SubscribeOutcome, TxOutcome};
 use rs_matter::im::encoding::ReportDataResp;
 use rs_matter::im::{AttrPath, GenericPath, InteractionModelState, OpCode};
 use rs_matter::persist::PERSISTENT_SUBSCRIPTIONS_START;
+use rs_matter::sc::ExchangeInitiator as _;
 use rs_matter::tlv::{FromTLV, TLVElement};
 use rs_matter::transport::exchange::Exchange;
 use rs_matter::transport::network::{Address, MatterRemoteService};

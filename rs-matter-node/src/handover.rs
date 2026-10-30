@@ -335,7 +335,7 @@ impl CommissioningHandover<'_> {
     }
 
     /// Build the envelope for the pending `fabric` and hand it to `f`.
-    pub(crate) fn with_pending<N, F, R>(
+    pub fn with_pending<N, F, R>(
         fabric: &Fabric,
         networks: N,
         regulatory: Option<HandoverRegulatory<'_>>,
@@ -370,10 +370,7 @@ impl CommissioningHandover<'_> {
 
 /// Stage the networks of `handover` into `networks`, as `AddOrUpdate*Network`
 /// would.
-pub(crate) fn stage_networks<N>(
-    handover: &CommissioningHandover<'_>,
-    mut networks: N,
-) -> Result<(), Error>
+pub fn stage_networks<N>(handover: &CommissioningHandover<'_>, mut networks: N) -> Result<(), Error>
 where
     N: Networks,
 {

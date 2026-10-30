@@ -28,9 +28,8 @@ use crate::error::{Error, ErrorCode};
 use crate::fabric::{Fabric, Fabrics};
 use crate::im::IMStatusCode;
 use crate::persist::KvBlobStoreAccess;
-use crate::sc::pase::Pase;
+use crate::session::SessionMode;
 use crate::tlv::TLVElement;
-use crate::transport::session::SessionMode;
 use crate::utils::bitflags::bitflags;
 use crate::utils::epoch::UtcTime;
 use crate::utils::init::{init, Init};
@@ -152,9 +151,8 @@ impl FailSafe {
     pub fn check_failsafe_timeout<S>(
         &mut self,
         fabrics: &mut Fabrics,
-        sessions: &mut crate::transport::session::Sessions,
+        remove_pase_sessions: impl FnOnce(),
         kv: S,
-        expire_sess_id: Option<u32>,
         mdns_notif: impl FnMut(),
         notify_change: impl FnMut(EndptId, ClusterId),
     ) -> Result<Option<Expiry>, Error>
@@ -170,14 +168,7 @@ impl FailSafe {
             {
                 // Timeout path: no caller exchange to preserve, so wipe
                 // every PASE session along with the fabric rollback.
-                return self.expire(
-                    fabrics,
-                    sessions,
-                    expire_sess_id,
-                    kv,
-                    mdns_notif,
-                    notify_change,
-                );
+                return self.expire(fabrics, remove_pase_sessions, kv, mdns_notif, notify_change);
             }
         }
 
@@ -188,11 +179,10 @@ impl FailSafe {
     /// fabric changes that the in-flight commissioning had staged and
     /// resetting the breadcrumb to 0.
     ///
-    /// `expire_sess_id` is the optional session ID of the exchange that
-    /// triggered the expiry — typically passed when the trigger arrived
-    /// over PASE, so the response can still be sent before the slot is
-    /// reclaimed. `None` for the timeout-driven path or when the trigger
-    /// arrived over CASE.
+    /// `remove_pase_sessions` removes the PASE sessions, which are orphaned by
+    /// the rollback. When the trigger arrived over PASE, it should keep the
+    /// session of the triggering exchange alive (marked expired), so that the
+    /// response can still be sent before the slot is reclaimed.
     ///
     /// Returns `None` if the fail-safe was not armed. Otherwise, the caller
     /// must broadcast `LifecycleOp::FailSafeExpiry` once the Matter state lock
@@ -204,8 +194,7 @@ impl FailSafe {
     pub fn expire<S>(
         &mut self,
         fabrics: &mut Fabrics,
-        sessions: &mut crate::transport::session::Sessions,
-        expire_sess_id: Option<u32>,
+        remove_pase_sessions: impl FnOnce(),
         kv: S,
         mut mdns_notif: impl FnMut(),
         mut notify_change: impl FnMut(EndptId, ClusterId),
@@ -240,10 +229,8 @@ impl FailSafe {
         // now orphaned: its commissioning attempt was rolled back, so the
         // session has nothing to do and should not stick around to fill
         // the session table (same leak class fixed for
-        // `CommissioningComplete`). `Sessions::remove_pase` keeps
-        // `expire_sess_id` alive (marked expired) so any in-flight
-        // response can complete.
-        sessions.remove_pase(expire_sess_id);
+        // `CommissioningComplete`).
+        remove_pase_sessions();
 
         self.state = State::Idle;
         self.breadcrumb = 0;
@@ -270,7 +257,7 @@ impl FailSafe {
         timeout_secs: u16,
         breadcrumb: u64,
         session_mode: &SessionMode,
-        pase: &mut Pase,
+        comm_window_open: bool,
     ) -> Result<(), Error> {
         if matches!(self.state, State::Idle) {
             if matches!(session_mode, SessionMode::PlainText) {
@@ -278,12 +265,12 @@ impl FailSafe {
                 return Err(ErrorCode::GennCommInvalidAuthentication.into());
             }
 
-            if pase.comm_window().is_some() && matches!(session_mode, SessionMode::Case { .. }) {
+            if comm_window_open && matches!(session_mode, SessionMode::Case { .. }) {
                 // Cannot arm via CASE while there's an active window
                 return Err(ErrorCode::Busy.into());
             }
 
-            // if pase.comm_window().is_none() && !matches!(session_mode, SessionMode::Case { .. }) {
+            // if !comm_window_open && !matches!(session_mode, SessionMode::Case { .. }) {
             //     // Cannot arm via PASE if there is no active commissioning window
             //     return Err(ErrorCode::GennCommInvalidAuthentication.into());
             // }
@@ -778,7 +765,7 @@ impl FailSafe {
     /// against `root_ca`, the NOC public key matches `secret_key`, and no
     /// existing fabric has the same fabric ID under the same root.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn check_new_noc<C: Crypto>(
+    pub fn check_new_noc<C: Crypto>(
         crypto: &C,
         time: UtcTime,
         fabrics: &Fabrics,
@@ -952,7 +939,6 @@ mod tests {
 
     use crate::cert::gen::VALID_FOREVER;
     use crate::crypto::{test_only_crypto, CanonPkcSecretKey, Crypto, PKC_CANON_SECRET_KEY_LEN};
-    use crate::dm::devices::test::TEST_DEV_COMM;
     use crate::dm::ROOT_ENDPOINT_ID;
     use crate::dm::{ClusterId, EndptId};
     use crate::error::{Error, ErrorCode};
@@ -962,8 +948,7 @@ mod tests {
     };
     use crate::fabric::{FabricPersist, Fabrics, MAX_FABRICS};
     use crate::persist::{MemKv, MemKvBlobStore};
-    use crate::sc::pase::Pase;
-    use crate::transport::session::{SessionMode, Sessions};
+    use crate::session::SessionMode;
     use crate::utils::epoch::UtcTime;
 
     use super::{Expiry, FailSafe, DEFAULT_FAILSAFE_EXPIRY_SECS};
@@ -995,29 +980,9 @@ mod tests {
     /// Arm a fresh fail-safe over `session_mode` with the default expiry.
     fn armed(session_mode: &SessionMode) -> FailSafe {
         let mut fs = FailSafe::new();
-        fs.arm(
-            DEFAULT_FAILSAFE_EXPIRY_SECS,
-            0,
-            session_mode,
-            &mut Pase::new(),
-        )
-        .unwrap();
+        fs.arm(DEFAULT_FAILSAFE_EXPIRY_SECS, 0, session_mode, false)
+            .unwrap();
         fs
-    }
-
-    /// Open a basic commissioning window on `pase`.
-    fn open_window(pase: &mut Pase) {
-        pase.open_basic_comm_window(
-            1,
-            &[0x11; 16],
-            TEST_DEV_COMM.password.reference(),
-            TEST_DEV_COMM.discriminator,
-            180,
-            None,
-            || {},
-            |_, _| {},
-        )
-        .unwrap();
     }
 
     /// Stage `rcac` via `AddTrustedRootCertificate`, then issue an `AddNOC`-style
@@ -1092,16 +1057,8 @@ mod tests {
         assert!(
             expires_at <= Instant::now() + Duration::from_secs(DEFAULT_FAILSAFE_EXPIRY_SECS as u64)
         );
-
-        let mut pase = Pase::new();
-        assert_eq!(pase.comm_window_expires_at(), None);
-
-        let before = Instant::now();
-        open_window(&mut pase);
-        let expires_at = pase.comm_window_expires_at().unwrap();
-        assert!(expires_at >= before + Duration::from_secs(180));
-        assert!(expires_at <= Instant::now() + Duration::from_secs(180));
     }
+
     #[test]
     fn new_and_init_are_idle() {
         use crate::utils::init::InitMaybeUninit;
@@ -1124,7 +1081,7 @@ mod tests {
     #[test]
     fn arm_over_pase_from_idle() {
         let mut fs = FailSafe::new();
-        fs.arm(60, 7, &pase(0), &mut Pase::new()).unwrap();
+        fs.arm(60, 7, &pase(0), false).unwrap();
 
         assert!(fs.is_armed());
         assert!(fs.is_armed_for(0));
@@ -1152,7 +1109,7 @@ mod tests {
     #[test]
     fn arm_over_case_from_idle() {
         let mut fs = FailSafe::new();
-        fs.arm(60, 1, &case(2), &mut Pase::new()).unwrap();
+        fs.arm(60, 1, &case(2), false).unwrap();
 
         assert!(fs.is_armed());
         assert!(fs.is_armed_for(2));
@@ -1175,7 +1132,7 @@ mod tests {
         let mut fs = FailSafe::new();
 
         assert_eq!(
-            code(fs.arm(60, 1, &SessionMode::PlainText, &mut Pase::new())),
+            code(fs.arm(60, 1, &SessionMode::PlainText, false)),
             ErrorCode::GennCommInvalidAuthentication
         );
         assert!(!fs.is_armed());
@@ -1184,36 +1141,28 @@ mod tests {
 
     #[test]
     fn arm_over_case_with_open_commissioning_window_is_busy() {
-        let mut pase_state = Pase::new();
-        open_window(&mut pase_state);
-
         let mut fs = FailSafe::new();
-        assert_eq!(
-            code(fs.arm(60, 1, &case(1), &mut pase_state)),
-            ErrorCode::Busy
-        );
+        assert_eq!(code(fs.arm(60, 1, &case(1), true)), ErrorCode::Busy);
         assert!(!fs.is_armed());
 
         // PASE arming is fine while the window is open
-        fs.arm(60, 1, &pase(0), &mut pase_state).unwrap();
+        fs.arm(60, 1, &pase(0), true).unwrap();
         assert!(fs.is_armed_for(0));
     }
 
     #[test]
     fn rearm_from_same_session_extends_and_updates_breadcrumb() {
         let mut fs = FailSafe::new();
-        fs.arm(60, 1, &pase(0), &mut Pase::new()).unwrap();
-        fs.arm(120, 2, &pase(0), &mut Pase::new()).unwrap();
+        fs.arm(60, 1, &pase(0), false).unwrap();
+        fs.arm(120, 2, &pase(0), false).unwrap();
 
         assert!(fs.is_armed_for(0));
         assert_eq!(fs.breadcrumb(), 2);
 
         // A commissioning window opened meanwhile does not affect re-arming
-        let mut pase_state = Pase::new();
-        open_window(&mut pase_state);
         let mut fs = FailSafe::new();
-        fs.arm(60, 1, &case(1), &mut Pase::new()).unwrap();
-        fs.arm(60, 3, &case(1), &mut pase_state).unwrap();
+        fs.arm(60, 1, &case(1), false).unwrap();
+        fs.arm(60, 3, &case(1), true).unwrap();
         assert!(fs.is_armed_for(1));
         assert_eq!(fs.breadcrumb(), 3);
     }
@@ -1221,14 +1170,14 @@ mod tests {
     #[test]
     fn rearm_from_other_session_is_rejected() {
         let mut fs = FailSafe::new();
-        fs.arm(60, 1, &pase(0), &mut Pase::new()).unwrap();
+        fs.arm(60, 1, &pase(0), false).unwrap();
 
         assert_eq!(
-            code(fs.arm(60, 2, &case(1), &mut Pase::new())),
+            code(fs.arm(60, 2, &case(1), false)),
             ErrorCode::NocInvalidFabricIndex
         );
         assert_eq!(
-            code(fs.arm(60, 2, &SessionMode::PlainText, &mut Pase::new())),
+            code(fs.arm(60, 2, &SessionMode::PlainText, false)),
             ErrorCode::GennCommInvalidAuthentication
         );
 
@@ -1236,9 +1185,9 @@ mod tests {
         assert_eq!(fs.breadcrumb(), 1);
 
         let mut fs = FailSafe::new();
-        fs.arm(60, 1, &case(1), &mut Pase::new()).unwrap();
+        fs.arm(60, 1, &case(1), false).unwrap();
         assert_eq!(
-            code(fs.arm(60, 2, &case(2), &mut Pase::new())),
+            code(fs.arm(60, 2, &case(2), false)),
             ErrorCode::NocInvalidFabricIndex
         );
         assert!(fs.is_armed_for(1));
@@ -1247,9 +1196,9 @@ mod tests {
     #[test]
     fn rearm_with_zero_timeout_disarms() {
         let mut fs = FailSafe::new();
-        fs.arm(60, 5, &case(1), &mut Pase::new()).unwrap();
+        fs.arm(60, 5, &case(1), false).unwrap();
 
-        fs.arm(0, 9, &case(1), &mut Pase::new()).unwrap();
+        fs.arm(0, 9, &case(1), false).unwrap();
 
         assert!(!fs.is_armed());
         assert_eq!(fs.breadcrumb(), 0);
@@ -1259,13 +1208,13 @@ mod tests {
     fn arm_from_idle_with_zero_timeout_is_a_noop() {
         let mut fs = FailSafe::new();
         fs.set_breadcrumb(3);
-        fs.arm(0, 5, &pase(0), &mut Pase::new()).unwrap();
+        fs.arm(0, 5, &pase(0), false).unwrap();
         assert!(!fs.is_armed());
         assert_eq!(fs.breadcrumb(), 3);
 
         // The session checks still apply
         assert_eq!(
-            fs.arm(0, 5, &SessionMode::PlainText, &mut Pase::new())
+            fs.arm(0, 5, &SessionMode::PlainText, false)
                 .unwrap_err()
                 .code(),
             ErrorCode::GennCommInvalidAuthentication
@@ -1281,16 +1230,14 @@ mod tests {
     fn check_failsafe_timeout_before_expiry_is_a_noop() {
         let mut fs = armed(&pase(0));
         let mut fabrics = Fabrics::new();
-        let mut sessions = Sessions::new();
         let kv = MemKv::new(MemKvBlobStore::default());
         let mut mdns = 0;
 
         let removed = fs
             .check_failsafe_timeout(
                 &mut fabrics,
-                &mut sessions,
+                || panic!("no removal expected"),
                 &kv,
-                None,
                 || mdns += 1,
                 |_, _| panic!("no change expected"),
             )
@@ -1305,9 +1252,8 @@ mod tests {
         let removed = fs
             .check_failsafe_timeout(
                 &mut fabrics,
-                &mut sessions,
+                || panic!("no removal expected"),
                 &kv,
-                None,
                 || mdns += 1,
                 |_, _| panic!("no change expected"),
             )
@@ -1349,7 +1295,7 @@ mod tests {
 
         // Armed over CASE for an existing fabric
         let mut fs = FailSafe::new();
-        fs.arm(60, 4, &case(1), &mut Pase::new()).unwrap();
+        fs.arm(60, 4, &case(1), false).unwrap();
         let fabric = fs.disarm(&case(1), &mut fabrics).unwrap();
         assert_eq!(fabric.fab_idx(), idx(1));
         assert!(!fs.is_armed());
@@ -1366,7 +1312,7 @@ mod tests {
         fs.set_breadcrumb(42);
         assert_eq!(fs.breadcrumb(), 42);
 
-        fs.arm(60, 7, &case(1), &mut Pase::new()).unwrap();
+        fs.arm(60, 7, &case(1), false).unwrap();
         assert_eq!(fs.breadcrumb(), 7);
 
         fs.set_breadcrumb(99);
@@ -2076,8 +2022,7 @@ mod tests {
         let removed = fs
             .expire(
                 &mut Fabrics::new(),
-                &mut Sessions::new(),
-                None,
+                || {},
                 MemKv::new(MemKvBlobStore::default()),
                 || panic!("no mdns notification expected"),
                 |_, _| panic!("no change expected"),
@@ -2104,8 +2049,7 @@ mod tests {
         let removed = fs
             .expire(
                 &mut fabrics,
-                &mut Sessions::new(),
-                None,
+                || {},
                 MemKv::new(MemKvBlobStore::default()),
                 || mdns += 1,
                 |ep, cl| changes.push((ep, cl)),
@@ -2177,14 +2121,7 @@ mod tests {
         assert_eq!(fabrics.get(idx(1)).unwrap().node_id(), 0x2222);
 
         let removed = fs
-            .expire(
-                &mut fabrics,
-                &mut Sessions::new(),
-                None,
-                &kv,
-                || {},
-                |_, _| {},
-            )
+            .expire(&mut fabrics, || {}, &kv, || {}, |_, _| {})
             .unwrap();
 
         // The fabric is resurrected from storage rather than removed
@@ -2217,14 +2154,7 @@ mod tests {
         // reloaded from its persisted copy and reported as kept
         let mut fs = armed(&case(1));
         let removed = fs
-            .expire(
-                &mut fabrics,
-                &mut Sessions::new(),
-                None,
-                &kv,
-                || {},
-                |_, _| {},
-            )
+            .expire(&mut fabrics, || {}, &kv, || {}, |_, _| {})
             .unwrap();
         assert_eq!(
             removed,
@@ -2237,14 +2167,7 @@ mod tests {
         // Armed over PASE with no fabric involved: nothing to roll back
         let mut fs = armed(&pase(0));
         let removed = fs
-            .expire(
-                &mut fabrics,
-                &mut Sessions::new(),
-                None,
-                &kv,
-                || {},
-                |_, _| {},
-            )
+            .expire(&mut fabrics, || {}, &kv, || {}, |_, _| {})
             .unwrap();
         assert_eq!(
             removed,
@@ -2255,51 +2178,31 @@ mod tests {
         assert_eq!(fabrics.iter().count(), 1);
     }
 
-    #[cfg(feature = "groups")]
     #[test]
-    fn expire_removes_pase_sessions_but_keeps_the_triggering_one() {
-        use crate::transport::network::Address;
-
-        let mut sessions = Sessions::new();
-        let mut ids = std::vec::Vec::new();
-        for mode in [pase(0), pase(0), case(1)] {
-            let session = sessions.add(0, false, Address::new(), None).unwrap();
-            session.set_session_mode(mode);
-            ids.push(session.id);
-        }
-        assert_eq!(sessions.iter().count(), 3);
+    fn expire_removes_the_pase_sessions_only_when_armed() {
+        let mut removals = 0;
 
         let mut fs = armed(&pase(0));
         fs.expire(
             &mut Fabrics::new(),
-            &mut sessions,
-            Some(ids[1]),
+            || removals += 1,
             MemKv::new(MemKvBlobStore::default()),
             || {},
             |_, _| {},
         )
         .unwrap();
+        assert_eq!(removals, 1);
 
-        let remaining: std::vec::Vec<_> = sessions.iter().map(|s| s.id).collect();
-        assert_eq!(remaining.len(), 2);
-        assert!(remaining.contains(&ids[1]));
-        assert!(remaining.contains(&ids[2]));
-        assert!(sessions.get(ids[1]).unwrap().is_expired());
-        assert!(!sessions.get(ids[2]).unwrap().is_expired());
-
-        // With no session to preserve, every PASE session goes
-        let mut fs = armed(&pase(0));
+        // Not armed anymore
         fs.expire(
             &mut Fabrics::new(),
-            &mut sessions,
-            None,
+            || removals += 1,
             MemKv::new(MemKvBlobStore::default()),
             || {},
             |_, _| {},
         )
         .unwrap();
-        let remaining: std::vec::Vec<_> = sessions.iter().map(|s| s.id).collect();
-        assert_eq!(remaining, [ids[2]]);
+        assert_eq!(removals, 1);
     }
 
     #[test]
@@ -2347,9 +2250,9 @@ mod tests {
         );
 
         // Re-arming from the same session and disarming work as usual
-        fs.arm(60, 13, &pase(3), &mut Pase::new()).unwrap();
+        fs.arm(60, 13, &pase(3), false).unwrap();
         assert_eq!(fs.breadcrumb(), 13);
-        fs.arm(0, 0, &pase(3), &mut Pase::new()).unwrap();
+        fs.arm(0, 0, &pase(3), false).unwrap();
         assert!(!fs.is_armed());
 
         // Arming normally after that is fine again

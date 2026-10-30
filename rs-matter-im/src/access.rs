@@ -101,7 +101,7 @@ impl ClusterAccess for Cluster<'_> {
         }
 
         access_req.set_target_perms(target_perms);
-        if access_req.allow() {
+        if accessor.allow(&access_req) {
             Ok(())
         } else {
             Err(IMStatusCode::UnsupportedAccess)
@@ -143,7 +143,7 @@ impl ClusterAccess for Cluster<'_> {
         }
 
         access_req.set_target_perms(target_perms);
-        if access_req.allow() {
+        if accessor.allow(&access_req) {
             Ok(())
         } else {
             Err(IMStatusCode::UnsupportedAccess)
@@ -170,7 +170,7 @@ impl ClusterAccess for Cluster<'_> {
             .unwrap_or(Access::empty());
 
         access_req.set_target_perms(target_perms);
-        if access_req.allow() {
+        if accessor.allow(&access_req) {
             Ok(())
         } else {
             Err(IMStatusCode::UnsupportedAccess)

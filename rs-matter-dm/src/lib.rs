@@ -29,6 +29,7 @@
 #![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
 
 // The dependencies, under the names the code uses for them
+use rs_matter_bdx as bdx;
 use rs_matter_cert as cert;
 use rs_matter_cert::attest;
 use rs_matter_crypto as crypto;
@@ -36,13 +37,14 @@ use rs_matter_crypto as crypto;
 use rs_matter_crypto::group_keys;
 use rs_matter_dm_base::persist;
 use rs_matter_dm_base::{except, handler_chain_type, with};
-#[cfg(feature = "groups")]
-use rs_matter_node::groupcast;
-use rs_matter_node::{
-    acl, basic_info, bdx, fabric, icd, im, ota, rtc, sc, transport, utils, BootReason, Matter,
-    MatterState,
-};
+use rs_matter_node::{basic_info, fabric, icd, rtc};
+use rs_matter_sc as sc;
 use rs_matter_tlv as tlv;
+use rs_matter_transport as transport;
+#[cfg(feature = "groups")]
+use rs_matter_transport::groupcast;
+use rs_matter_transport::{acl, im, BootReason, Matter, MatterState};
+use rs_matter_utils as utils;
 use rs_matter_utils::error;
 
 // For the exported macros
@@ -53,7 +55,7 @@ pub use rs_matter_dm_base::devices;
 /// the paths the code and the exported macros use for them.
 #[doc(hidden)]
 pub mod dm {
-    pub use rs_matter_node::dm::*;
+    pub use rs_matter_dm_base::*;
 
     pub use crate::{clusters, endpoints, networks};
 }
@@ -67,3 +69,4 @@ pub(crate) mod fmt;
 pub mod clusters;
 pub mod endpoints;
 pub mod networks;
+pub mod ota;

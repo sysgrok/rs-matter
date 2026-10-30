@@ -26,17 +26,14 @@ use cfg_if::cfg_if;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
-use crate::dm::{
-    Access, AuxAclCheck, ClusterId, DeviceType, EndptId, NodeId, OperationContext, Privilege,
-};
+use crate::dm::{Access, ClusterId, DeviceType, EndptId, NodeId, Privilege};
 use crate::error::{Error, ErrorCode};
+use crate::fabric::Fabrics;
 use crate::im::GenericPath;
+use crate::session::{SessionMode, MAX_CAT_IDS_PER_NOC};
 use crate::tlv::{FromTLV, Nullable, TLVElement, TLVTag, TLVWrite, ToTLV, TLV};
-use crate::transport::exchange::ExchangeIdExt as _;
-use crate::transport::session::{Session, SessionMode, MAX_CAT_IDS_PER_NOC};
 use crate::utils::init::{init, Init};
 use crate::utils::storage::Vec;
-use crate::Matter;
 
 cfg_if! {
     if #[cfg(feature = "max-subjects-per-acl-32")] {
@@ -335,8 +332,11 @@ impl defmt::Format for AccessorSubjects {
     }
 }
 
-/// The Accessor Object
-pub struct Accessor<'a> {
+/// Who is making an access request.
+///
+/// `Accessor`, in `rs-matter-transport`, puts this together with the fabric
+/// table that the requests are checked against.
+pub struct SubjectDescriptor {
     /// The fabric index of the accessor
     pub fab_idx: u8,
     /// Whether AUX ACL was enabled at the time this accessor was instantiated
@@ -345,83 +345,71 @@ pub struct Accessor<'a> {
     subjects: AccessorSubjects,
     /// The auth mode of this session. Might be `None` for plain-text sessions
     auth_mode: Option<AuthMode>,
-    // Necessary so as to get access to the fabric manager to perform the access check in AccessReq::allow()
-    // as well as for a few other ACL related operations.
-    matter: &'a Matter<'a>,
 }
 
-impl<'a> Accessor<'a> {
-    /// Create a new Accessor object for the session an operation arrived on
-    pub fn for_operation(
-        ctx: impl OperationContext,
-        matter: &'a Matter<'a>,
-    ) -> Result<Self, Error> {
-        ctx.exchange_id()
-            .accessor(matter, ctx.metadata().aux_acl_enabled())
-    }
-
-    /// Create a new Accessor object for the given session
-    pub fn for_session(session: &Session, matter: &'a Matter<'a>, aux_acl_enabled: bool) -> Self {
-        match session.get_session_mode() {
+impl SubjectDescriptor {
+    /// Create the subject descriptor of a session
+    ///
+    /// # Arguments
+    /// - `session_mode`: The mode of the session
+    /// - `peer_node_id`: The node ID of the peer of the session, if the session has one
+    /// - `aux_acl_enabled`: Whether AUX ACL is enabled
+    pub fn for_session(
+        session_mode: &SessionMode,
+        peer_node_id: Option<NodeId>,
+        aux_acl_enabled: bool,
+    ) -> Self {
+        match session_mode {
             SessionMode::Case {
                 fab_idx, cat_ids, ..
             } => {
-                let mut subject =
-                    AccessorSubjects::new(session.get_peer_node_id().unwrap_or_default());
+                let mut subject = AccessorSubjects::new(peer_node_id.unwrap_or_default());
                 for i in *cat_ids {
                     if i != 0 {
                         let _ = subject.add_catid(i);
                     }
                 }
-                Accessor::new(
+                Self::new(
                     fab_idx.get(),
                     aux_acl_enabled,
                     subject,
                     Some(AuthMode::Case),
-                    matter,
                 )
             }
-            SessionMode::Pase { fab_idx } => Accessor::new(
+            SessionMode::Pase { fab_idx } => Self::new(
                 *fab_idx,
                 aux_acl_enabled,
                 AccessorSubjects::new(1),
                 Some(AuthMode::Pase),
-                matter,
             ),
-            SessionMode::Group { fab_idx, group_id } => Accessor::new(
+            SessionMode::Group { fab_idx, group_id } => Self::new(
                 fab_idx.get(),
                 aux_acl_enabled,
                 AccessorSubjects::new(*group_id as u64),
                 Some(AuthMode::Group),
-                matter,
             ),
-            SessionMode::PlainText => {
-                Accessor::new(0, aux_acl_enabled, AccessorSubjects::new(1), None, matter)
-            }
+            SessionMode::PlainText => Self::new(0, aux_acl_enabled, AccessorSubjects::new(1), None),
         }
     }
 
-    /// Create a new Accessor object
+    /// Create a new subject descriptor
     ///
     /// # Arguments
     /// - `fab_idx`: The fabric index of the accessor (0 means no fabric index)
     /// - `aux_acl_enabled`: Whether AUX ACL was enabled at the time this accessor was instantiated
     /// - `subjects`: The subjects of the accessor
     /// - `auth_mode`: The auth mode of the accessor
-    /// - `matter`: The Matter instance
     pub const fn new(
         fab_idx: u8,
         aux_acl_enabled: bool,
         subjects: AccessorSubjects,
         auth_mode: Option<AuthMode>,
-        matter: &'a Matter<'a>,
     ) -> Self {
         Self {
             fab_idx,
             aux_acl_enabled,
             subjects,
             auth_mode,
-            matter,
         }
     }
 
@@ -448,7 +436,7 @@ impl<'a> Accessor<'a> {
     ///
     /// For group sessions, only endpoints that are members of the group are accessible.
     /// For all other session types, all endpoints are accessible.
-    pub fn is_endpoint_accessible(&self, endpoint_id: EndptId) -> bool {
+    pub fn is_endpoint_accessible(&self, endpoint_id: EndptId, fabrics: &Fabrics) -> bool {
         if self.auth_mode != Some(AuthMode::Group) {
             return true;
         }
@@ -463,16 +451,14 @@ impl<'a> Accessor<'a> {
                 return false;
             };
 
-            self.matter.with_state(|state| {
-                let Some(fabric) = state.fabrics.get(fab_idx) else {
-                    return false;
-                };
+            let Some(fabric) = fabrics.get(fab_idx) else {
+                return false;
+            };
 
-                fabric
-                    .groups()
-                    .get(group_id)
-                    .is_some_and(|e| e.endpoints.contains(&endpoint_id))
-            })
+            fabric
+                .groups()
+                .get(group_id)
+                .is_some_and(|e| e.endpoints.contains(&endpoint_id))
         }
 
         // Without multicast group support there are no group sessions, so
@@ -481,17 +467,9 @@ impl<'a> Accessor<'a> {
         // not silently grant access to an endpoint.
         #[cfg(not(feature = "groups"))]
         {
-            let _ = endpoint_id;
+            let _ = (endpoint_id, fabrics);
             false
         }
-    }
-
-    /// Return the Operational Node ID of the accessor, if any
-    pub fn node_id(&self) -> Option<NodeId> {
-        let fab_idx = NonZeroU8::new(self.fab_idx)?;
-
-        self.matter
-            .with_state(|state| state.fabrics.get(fab_idx).map(|fabric| fabric.node_id()))
     }
 
     /// Return the peer node ID (admin node ID) for CASE sessions, or None for PASE/other sessions.
@@ -528,7 +506,7 @@ pub struct AccessDesc<'a> {
 /// Access Request Object
 pub struct AccessReq<'a> {
     /// The accessor requesting access
-    accessor: &'a Accessor<'a>,
+    accessor: &'a SubjectDescriptor,
     /// The object being accessed
     object: AccessDesc<'a>,
 }
@@ -542,7 +520,7 @@ impl<'a> AccessReq<'a> {
     /// applicable (e.g. for unit tests that don't exercise `DeviceType` ACL
     /// targets).
     pub const fn new(
-        accessor: &'a Accessor<'a>,
+        accessor: &'a SubjectDescriptor,
         path: GenericPath,
         operation: Access,
         device_types: &'a [DeviceType],
@@ -559,7 +537,7 @@ impl<'a> AccessReq<'a> {
     }
 
     /// Return the accessor of the request
-    pub fn accessor(&self) -> &Accessor<'_> {
+    pub fn accessor(&self) -> &SubjectDescriptor {
         self.accessor
     }
 
@@ -581,15 +559,13 @@ impl<'a> AccessReq<'a> {
     /// This checks all the ACL list to identify if any of the ACLs provides the
     /// _accessor_ the necessary privileges to access the target as per its
     /// permissions
-    pub fn allow(&self) -> bool {
-        self.accessor.matter.with_state(|state| {
-            let allow = state.fabrics.allow(self, self.accessor.aux_acl_enabled());
+    pub fn allow(&self, fabrics: &Fabrics) -> bool {
+        let allow = fabrics.allow(self, self.accessor.aux_acl_enabled());
 
-            #[cfg(feature = "groups")]
-            let allow = allow || self.allow_groupcast_auxiliary(&state.fabrics);
+        #[cfg(feature = "groups")]
+        let allow = allow || self.allow_groupcast_auxiliary(fabrics);
 
-            allow
-        })
+        allow
     }
 
     /// Check whether access is granted by an auxiliary ACL entry synthesized
@@ -598,7 +574,7 @@ impl<'a> AccessReq<'a> {
     /// group's endpoints (see the Groupcast Auxiliary ACL Handling section of
     /// the Matter Core spec).
     #[cfg(feature = "groups")]
-    fn allow_groupcast_auxiliary(&self, fabrics: &crate::fabric::Fabrics) -> bool {
+    fn allow_groupcast_auxiliary(&self, fabrics: &Fabrics) -> bool {
         if !self.accessor.aux_acl_enabled() {
             return false;
         }
@@ -675,7 +651,7 @@ pub struct AclEntry {
     auxiliary_type: Option<AuxiliaryType>,
     // Note that this field will always be `Some(NN)` when the entry is persisted in storage,
     // however, it will be `None` when the entry is coming from the other peer.
-    #[tagval(crate::im::encoding::FABRIC_INDEX_TAG)]
+    #[tagval(crate::im::FABRIC_INDEX_TAG)]
     pub fab_idx: Option<NonZeroU8>,
 }
 
@@ -806,7 +782,7 @@ impl AclEntry {
             .map_err(|_| ErrorCode::ResourceExhausted.into())
     }
 
-    fn match_accessor(&self, accessor: &Accessor) -> bool {
+    fn match_accessor(&self, accessor: &SubjectDescriptor) -> bool {
         if Some(self.auth_mode) != accessor.auth_mode {
             return false;
         }
@@ -884,11 +860,10 @@ pub(crate) mod tests {
     use crate::acl::{gen_noc_cat, AccessorSubjects};
     use crate::dm::{Access, Privilege};
     use crate::error::Error;
+    use crate::fabric::Fabrics;
     use crate::im::GenericPath;
-    use crate::test::test_matter;
-    use crate::Matter;
 
-    use super::{AccessReq, Accessor, AclEntry, AuthMode, Target};
+    use super::{AccessReq, AclEntry, AuthMode, SubjectDescriptor, Target};
 
     pub(crate) const FAB_1: NonZeroU8 = match NonZeroU8::new(1) {
         Some(f) => f,
@@ -900,89 +875,84 @@ pub(crate) mod tests {
         None => ::core::unreachable!(),
     };
 
-    fn add_fabric(matter: &Matter<'_>) {
-        matter.with_state(|state| {
-            // Add fabric with ID 1
-            state.fabrics.add_with_post_init(|_| Ok(())).unwrap();
-        })
+    fn add_fabric(fabrics: &mut Fabrics) {
+        // Add fabric with ID 1
+        fabrics.add_with_post_init(|_| Ok(())).unwrap();
     }
 
-    fn add_acl(matter: &Matter<'_>, fab_idx: NonZeroU8, entry: AclEntry) -> Result<usize, Error> {
-        matter.with_state(|state| state.fabrics.fabric_mut(fab_idx)?.acl_add(entry))
+    fn add_acl(fabrics: &mut Fabrics, fab_idx: NonZeroU8, entry: AclEntry) -> Result<usize, Error> {
+        fabrics.fabric_mut(fab_idx)?.acl_add(entry)
     }
 
-    fn remove_all_acl(matter: &Matter<'_>, fab_idx: NonZeroU8) {
-        matter.with_state(|state| state.fabrics.fabric_mut(fab_idx).unwrap().acl_remove_all())
+    fn remove_all_acl(fabrics: &mut Fabrics, fab_idx: NonZeroU8) {
+        fabrics.fabric_mut(fab_idx).unwrap().acl_remove_all()
     }
 
     #[test]
     fn test_basic_empty_subject_target() {
-        let matter = test_matter();
-        let accessor = Accessor::new(
+        let mut fabrics = Fabrics::new();
+        let accessor = SubjectDescriptor::new(
             0,
             false,
             AccessorSubjects::new(112233),
             Some(AuthMode::Pase),
-            &matter,
         );
         let path = GenericPath::new(Some(1), Some(1234), None);
         let mut req_pase = AccessReq::new(&accessor, path, Access::READ, &[]);
         req_pase.set_target_perms(Access::RWVA);
 
         // Always allow for PASE sessions
-        assert!(req_pase.allow());
+        assert!(req_pase.allow(&fabrics));
 
-        let accessor = Accessor::new(
+        let accessor = SubjectDescriptor::new(
             2,
             false,
             AccessorSubjects::new(112233),
             Some(AuthMode::Case),
-            &matter,
         );
         let path = GenericPath::new(Some(1), Some(1234), None);
         let mut req = AccessReq::new(&accessor, path, Access::READ, &[]);
         req.set_target_perms(Access::RWVA);
 
         // Default deny for CASE
-        assert_eq!(req.allow(), false);
+        assert_eq!(req.allow(&fabrics), false);
 
         // Add fabric with ID 1
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
         // Deny adding invalid auth mode (PASE is reserved for future)
         let new = AclEntry::new(None, Privilege::VIEW, AuthMode::Pase);
-        assert!(add_acl(&matter, FAB_1, new).is_err());
+        assert!(add_acl(&mut fabrics, FAB_1, new).is_err());
 
         // Deny for fab idx mismatch
         let new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
-        assert_eq!(add_acl(&matter, FAB_1, new).unwrap(), 0);
-        assert_eq!(req.allow(), false);
+        assert_eq!(add_acl(&mut fabrics, FAB_1, new).unwrap(), 0);
+        assert_eq!(req.allow(&fabrics), false);
 
         // Always allow for PASE sessions
-        assert!(req_pase.allow());
+        assert!(req_pase.allow(&fabrics));
 
         // Add fabric with ID 2
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
         // Allow
         let new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
-        assert_eq!(add_acl(&matter, FAB_2, new).unwrap(), 0);
-        assert_eq!(req.allow(), true);
+        assert_eq!(add_acl(&mut fabrics, FAB_2, new).unwrap(), 0);
+        assert_eq!(req.allow(&fabrics), true);
     }
 
     #[test]
     fn test_subject() {
-        let matter = test_matter();
+        let mut fabrics = Fabrics::new();
 
         // Add fabric with ID 1
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
-        let accessor = Accessor::new(
+        let accessor = SubjectDescriptor::new(
             1,
             false,
             AccessorSubjects::new(112233),
             Some(AuthMode::Case),
-            &matter,
         );
         let path = GenericPath::new(Some(1), Some(1234), None);
         let mut req = AccessReq::new(&accessor, path, Access::READ, &[]);
@@ -991,22 +961,22 @@ pub(crate) mod tests {
         // Deny for subject mismatch
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject(112232).unwrap();
-        assert_eq!(add_acl(&matter, FAB_1, new).unwrap(), 0);
-        assert_eq!(req.allow(), false);
+        assert_eq!(add_acl(&mut fabrics, FAB_1, new).unwrap(), 0);
+        assert_eq!(req.allow(&fabrics), false);
 
         // Allow for subject match - target is wildcard
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject(112233).unwrap();
-        assert_eq!(add_acl(&matter, FAB_1, new).unwrap(), 1);
-        assert_eq!(req.allow(), true);
+        assert_eq!(add_acl(&mut fabrics, FAB_1, new).unwrap(), 1);
+        assert_eq!(req.allow(&fabrics), true);
     }
 
     #[test]
     fn test_cat() {
-        let matter = test_matter();
+        let mut fabrics = Fabrics::new();
 
         // Add fabric with ID 1
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
         let allow_cat = 0xABCD;
         let disallow_cat = 0xCAFE;
@@ -1016,7 +986,7 @@ pub(crate) mod tests {
         let mut subjects = AccessorSubjects::new(112233);
         subjects.add_catid(gen_noc_cat(allow_cat, v2)).unwrap();
 
-        let accessor = Accessor::new(1, false, subjects, Some(AuthMode::Case), &matter);
+        let accessor = SubjectDescriptor::new(1, false, subjects, Some(AuthMode::Case));
         let path = GenericPath::new(Some(1), Some(1234), None);
         let mut req = AccessReq::new(&accessor, path, Access::READ, &[]);
         req.set_target_perms(Access::RWVA);
@@ -1025,28 +995,28 @@ pub(crate) mod tests {
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject_catid(gen_noc_cat(disallow_cat, v2))
             .unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), false);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), false);
 
         // Deny of CAT version mismatch
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject_catid(gen_noc_cat(allow_cat, v3)).unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), false);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), false);
 
         // Allow for CAT match
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject_catid(gen_noc_cat(allow_cat, v2)).unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), true);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), true);
     }
 
     #[test]
     fn test_cat_version() {
-        let matter = test_matter();
+        let mut fabrics = Fabrics::new();
 
         // Add fabric with ID 1
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
         let allow_cat = 0xABCD;
         let disallow_cat = 0xCAFE;
@@ -1056,7 +1026,7 @@ pub(crate) mod tests {
         let mut subjects = AccessorSubjects::new(112233);
         subjects.add_catid(gen_noc_cat(allow_cat, v3)).unwrap();
 
-        let accessor = Accessor::new(1, false, subjects, Some(AuthMode::Case), &matter);
+        let accessor = SubjectDescriptor::new(1, false, subjects, Some(AuthMode::Case));
         let path = GenericPath::new(Some(1), Some(1234), None);
         let mut req = AccessReq::new(&accessor, path, Access::READ, &[]);
         req.set_target_perms(Access::RWVA);
@@ -1065,29 +1035,28 @@ pub(crate) mod tests {
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject_catid(gen_noc_cat(disallow_cat, v2))
             .unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), false);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), false);
 
         // Allow for CAT match and version more than ACL version
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject_catid(gen_noc_cat(allow_cat, v2)).unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), true);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), true);
     }
 
     #[test]
     fn test_target() {
-        let matter = test_matter();
+        let mut fabrics = Fabrics::new();
 
         // Add fabric with ID 1
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
-        let accessor = Accessor::new(
+        let accessor = SubjectDescriptor::new(
             1,
             false,
             AccessorSubjects::new(112233),
             Some(AuthMode::Case),
-            &matter,
         );
         let path = GenericPath::new(Some(1), Some(1234), None);
         let mut req = AccessReq::new(&accessor, path, Access::READ, &[]);
@@ -1101,8 +1070,8 @@ pub(crate) mod tests {
             device_type: None,
         })
         .unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), false);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), false);
 
         // Allow for cluster match - subject wildcard
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
@@ -1112,11 +1081,11 @@ pub(crate) mod tests {
             device_type: None,
         })
         .unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), true);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), true);
 
         // Clean state
-        remove_all_acl(&matter, FAB_1);
+        remove_all_acl(&mut fabrics, FAB_1);
 
         // Allow for endpoint match - subject wildcard
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
@@ -1126,11 +1095,11 @@ pub(crate) mod tests {
             device_type: None,
         })
         .unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), true);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), true);
 
         // Clean state
-        remove_all_acl(&matter, FAB_1);
+        remove_all_acl(&mut fabrics, FAB_1);
 
         // Allow for exact match
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
@@ -1141,23 +1110,22 @@ pub(crate) mod tests {
         })
         .unwrap();
         new.add_subject(112233).unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
-        assert_eq!(req.allow(), true);
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
+        assert_eq!(req.allow(&fabrics), true);
     }
 
     #[test]
     fn test_privilege() {
-        let matter = test_matter();
+        let mut fabrics = Fabrics::new();
 
         // Add fabric with ID 1
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
-        let accessor = Accessor::new(
+        let accessor = SubjectDescriptor::new(
             1,
             false,
             AccessorSubjects::new(112233),
             Some(AuthMode::Case),
-            &matter,
         );
         let path = GenericPath::new(Some(1), Some(1234), None);
 
@@ -1170,12 +1138,12 @@ pub(crate) mod tests {
         })
         .unwrap();
         new.add_subject(112233).unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
 
         // Write on an RWVA without admin access - deny
         let mut req = AccessReq::new(&accessor, path.clone(), Access::WRITE, &[]);
         req.set_target_perms(Access::RWVA);
-        assert_eq!(req.allow(), false);
+        assert_eq!(req.allow(&fabrics), false);
 
         // Create an Exact Match ACL with Admin privilege
         let mut new = AclEntry::new(None, Privilege::ADMIN, AuthMode::Case);
@@ -1186,40 +1154,38 @@ pub(crate) mod tests {
         })
         .unwrap();
         new.add_subject(112233).unwrap();
-        add_acl(&matter, FAB_1, new).unwrap();
+        add_acl(&mut fabrics, FAB_1, new).unwrap();
 
         // Write on an RWVA with admin access - allow
         let mut req = AccessReq::new(&accessor, path, Access::WRITE, &[]);
         req.set_target_perms(Access::RWVA);
-        assert_eq!(req.allow(), true);
+        assert_eq!(req.allow(&fabrics), true);
     }
 
     #[test]
     fn test_delete_for_fabric() {
-        let matter = test_matter();
+        let mut fabrics = Fabrics::new();
 
         // Add fabric with ID 1
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
         // Add fabric with ID 2
-        add_fabric(&matter);
+        add_fabric(&mut fabrics);
 
         let path = GenericPath::new(Some(1), Some(1234), None);
-        let accessor2 = Accessor::new(
+        let accessor2 = SubjectDescriptor::new(
             1,
             false,
             AccessorSubjects::new(112233),
             Some(AuthMode::Case),
-            &matter,
         );
         let mut req1 = AccessReq::new(&accessor2, path.clone(), Access::READ, &[]);
         req1.set_target_perms(Access::RWVA);
-        let accessor3 = Accessor::new(
+        let accessor3 = SubjectDescriptor::new(
             2,
             false,
             AccessorSubjects::new(112233),
             Some(AuthMode::Case),
-            &matter,
         );
         let mut req2 = AccessReq::new(&accessor3, path, Access::READ, &[]);
         req2.set_target_perms(Access::RWVA);
@@ -1227,19 +1193,19 @@ pub(crate) mod tests {
         // Allow for subject match - target is wildcard - Fabric idx 2
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject(112233).unwrap();
-        assert_eq!(add_acl(&matter, FAB_1, new).unwrap(), 0);
+        assert_eq!(add_acl(&mut fabrics, FAB_1, new).unwrap(), 0);
 
         // Allow for subject match - target is wildcard - Fabric idx 3
         let mut new = AclEntry::new(None, Privilege::VIEW, AuthMode::Case);
         new.add_subject(112233).unwrap();
-        assert_eq!(add_acl(&matter, FAB_2, new).unwrap(), 0);
+        assert_eq!(add_acl(&mut fabrics, FAB_2, new).unwrap(), 0);
 
         // Req for Fabric idx 1 gets denied, and that for Fabric idx 2 is allowed
-        assert_eq!(req1.allow(), true);
-        assert_eq!(req2.allow(), true);
-        remove_all_acl(&matter, FAB_1);
-        assert_eq!(req1.allow(), false);
-        assert_eq!(req2.allow(), true);
+        assert_eq!(req1.allow(&fabrics), true);
+        assert_eq!(req2.allow(&fabrics), true);
+        remove_all_acl(&mut fabrics, FAB_1);
+        assert_eq!(req1.allow(&fabrics), false);
+        assert_eq!(req2.allow(&fabrics), true);
     }
 
     /// With the `AUXILIARY` feature advertised, a wildcard-target Group-auth
@@ -1247,22 +1213,21 @@ pub(crate) mod tests {
     /// other endpoints are unaffected).
     #[test]
     fn test_aux_wildcard_group_excludes_root_endpoint() {
-        let matter = test_matter();
-        add_fabric(&matter);
+        let mut fabrics = Fabrics::new();
+        add_fabric(&mut fabrics);
 
         const GROUP_ID: u64 = 0x12AB;
 
         // A regular (writable) ACL entry: Group auth, wildcard targets
         let mut entry = AclEntry::new(None, Privilege::OPERATE, AuthMode::Group);
         entry.add_subject(GROUP_ID).unwrap();
-        add_acl(&matter, FAB_1, entry).unwrap();
+        add_acl(&mut fabrics, FAB_1, entry).unwrap();
 
-        let accessor = Accessor::new(
+        let accessor = SubjectDescriptor::new(
             FAB_1.get(),
             false,
             AccessorSubjects::new(GROUP_ID),
             Some(AuthMode::Group),
-            &matter,
         );
 
         let ep0 = GenericPath::new(Some(0), Some(1234), None);
@@ -1272,36 +1237,35 @@ pub(crate) mod tests {
         for path in [ep0.clone(), ep1.clone()] {
             let mut req = AccessReq::new(&accessor, path, Access::WRITE, &[]);
             req.set_target_perms(Access::WO);
-            assert!(req.allow());
+            assert!(req.allow(&fabrics));
         }
 
-        let accessor = Accessor::new(
+        let accessor = SubjectDescriptor::new(
             FAB_1.get(),
             true,
             AccessorSubjects::new(GROUP_ID),
             Some(AuthMode::Group),
-            &matter,
         );
 
         // With the feature: the root endpoint is excluded...
         let mut req = AccessReq::new(&accessor, ep0.clone(), Access::WRITE, &[]);
         req.set_target_perms(Access::WO);
-        assert!(!req.allow());
+        assert!(!req.allow(&fabrics));
 
         // ...other endpoints are unaffected...
         let mut req = AccessReq::new(&accessor, ep1, Access::WRITE, &[]);
         req.set_target_perms(Access::WO);
-        assert!(req.allow());
+        assert!(req.allow(&fabrics));
 
         // ...and an entry explicitly targeting the root endpoint still works.
-        remove_all_acl(&matter, FAB_1);
+        remove_all_acl(&mut fabrics, FAB_1);
         let mut entry = AclEntry::new(None, Privilege::OPERATE, AuthMode::Group);
         entry.add_subject(GROUP_ID).unwrap();
         entry.add_target(Target::new(Some(0), None, None)).unwrap();
-        add_acl(&matter, FAB_1, entry).unwrap();
+        add_acl(&mut fabrics, FAB_1, entry).unwrap();
 
         let mut req = AccessReq::new(&accessor, ep0, Access::WRITE, &[]);
         req.set_target_perms(Access::WO);
-        assert!(req.allow());
+        assert!(req.allow(&fabrics));
     }
 }

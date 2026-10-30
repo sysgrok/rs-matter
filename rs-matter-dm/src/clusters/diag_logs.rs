@@ -57,6 +57,7 @@ use core::num::NonZeroU8;
 use crate::bdx::{BdxBuffer, BdxUploadInitiator};
 use crate::dm::{Cluster, Dataver, HandlerContext, InvokeContext};
 use crate::error::{Error, ErrorCode};
+use crate::sc::ExchangeInitiator as _;
 use crate::tlv::{Octets, TLVBuilderParent};
 use crate::transport::exchange::ExchangeIdExt as _;
 use crate::transport::exchange::{Exchange, MAX_EXCHANGE_RX_BUF_SIZE};

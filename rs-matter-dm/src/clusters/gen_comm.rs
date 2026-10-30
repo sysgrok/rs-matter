@@ -406,8 +406,9 @@ impl ClusterHandler for GenCommHandler<'_> {
 
                 expiry = state.failsafe.expire(
                     &mut state.fabrics,
-                    &mut state.sessions,
-                    pase_sess_id,
+                    || {
+                        state.sessions.remove_pase(pase_sess_id);
+                    },
                     ctx.kv(),
                     notify_mdns,
                     notify_change,
@@ -423,7 +424,7 @@ impl ClusterHandler for GenCommHandler<'_> {
                     expiry_length_seconds,
                     request.breadcrumb()?,
                     sess.get_session_mode(),
-                    &mut state.pase,
+                    state.pase.comm_window().is_some(),
                 )
             }))?
         };

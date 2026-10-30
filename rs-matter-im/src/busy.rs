@@ -15,10 +15,7 @@
  *    limitations under the License.
  */
 
-use core::future::Future;
-
 use crate::error::*;
-use crate::respond::ExchangeHandler;
 use crate::transport::exchange::Exchange;
 
 use super::{IMStatusCode, OpCode, StatusResp, PROTO_ID_INTERACTION_MODEL};
@@ -73,11 +70,5 @@ impl BusyInteractionModel {
                 Ok(Some(OpCode::StatusResponse.into()))
             })
             .await
-    }
-}
-
-impl ExchangeHandler for BusyInteractionModel {
-    fn handle(&self, exchange: Exchange<'_>) -> impl Future<Output = Result<(), Error>> {
-        BusyInteractionModel::handle(self, exchange)
     }
 }

@@ -141,13 +141,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The unit tests of `rs-matter-utils`, `-tlv`, `-im-base`, `-dm`, `-dm-base` (without the
-      # file I/O of `persist`), `-im` (without the responders), the basic information, the clock,
-      # the IM client and the transport of `-node`, and the DER helpers of `-cert`
+      # The unit tests of `rs-matter-utils`, `-tlv`, `-im-base`, `-dm`, `-im`, `-dm-base` (without
+      # the file I/O of `persist`), the basic information and the clock of `-node`, the IM client
+      # and the transport of `-transport`, and the DER helpers of `-cert`
       - name: Miri
         run: |
           cargo miri test --lib -p rs-matter-utils -p rs-matter-tlv -p rs-matter-im-base -p rs-matter-dm
           cargo miri test --lib -p rs-matter-dm-base -- --skip persist::
-          cargo miri test --lib -p rs-matter-im -- --skip respond::
-          cargo miri test --lib -p rs-matter-node -- basic_info:: im:: rtc:: transport::
+          cargo miri test --lib -p rs-matter-im
+          cargo miri test --lib -p rs-matter-node -- basic_info:: rtc::
+          cargo miri test --lib -p rs-matter-transport -- im:: transport::
           cargo miri test --lib -p rs-matter-cert -- der_utils::

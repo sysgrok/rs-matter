@@ -74,8 +74,8 @@ impl<'a> RcacGenerator<'a> {
     ///     this is what lives in an HSM. Retain only as long as needed
     ///     to sign one or more ICACs; drop it afterwards.
     ///   - `rcac_bytes` — Matter-TLV-encoded RCAC. Install in
-    ///     [`rs_matter_node::fabric::Fabric::root_ca`] (via
-    ///     [`rs_matter_node::fabric::Fabrics::add`]) and ship to every fabric
+    ///     `Fabric::root_ca` (via
+    ///     `Fabrics::add`) and ship to every fabric
     ///     member.
     ///
     /// The RCAC's subject ID is randomly generated; the caller can

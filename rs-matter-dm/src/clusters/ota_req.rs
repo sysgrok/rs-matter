@@ -48,6 +48,7 @@ use crate::fabric::MAX_FABRICS;
 use crate::persist::{
     KvBlobStore, KvBlobStoreAccess, Persist, OTA_PROVIDERS_KEY, RUNNING_VERSION_KEY,
 };
+use crate::sc::ExchangeInitiator as _;
 use crate::tlv::{FromTLV, Nullable, Octets, TLVArray, TLVBuilderParent, ToTLV};
 use crate::transport::exchange::Exchange;
 use crate::utils::cell::RefCell;

@@ -295,8 +295,9 @@ impl ClusterHandler for AdminCommHandler<'_> {
 
             let expiry = state.failsafe.expire(
                 &mut state.fabrics,
-                &mut state.sessions,
-                expire_sess_id,
+                || {
+                    state.sessions.remove_pase(expire_sess_id);
+                },
                 ctx.kv(),
                 notify_mdns,
                 notify_change,

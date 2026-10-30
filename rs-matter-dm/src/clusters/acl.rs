@@ -755,9 +755,9 @@ mod tests {
     /// A `Matter` instance of the test device.
     fn test_matter() -> crate::Matter<'static> {
         crate::Matter::new(
-            &crate::dm::devices::test::TEST_DEV_DET,
-            crate::dm::devices::test::TEST_DEV_COMM,
-            &crate::dm::devices::test::TEST_DEV_ATT,
+            &rs_matter_node::test_device::TEST_DEV_DET,
+            rs_matter_node::test_device::TEST_DEV_COMM,
+            &rs_matter_node::test_device::TEST_DEV_ATT,
             0,
         )
     }

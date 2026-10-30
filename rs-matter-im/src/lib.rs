@@ -20,10 +20,9 @@
 //! types, plus the engine - [`InteractionModel`] - that drives those
 //! interactions against a data model.
 //!
-//! It also contains a requestor-side IM client ([`client`]), a very simple
+//! It also contains a requestor-side IM client ([`client`]) and a very simple
 //! responder - [`busy`] - which always returns a busy status code to all
-//! incoming IM requests, and the responders which combine the Interaction
-//! Model with the secure channel and BDX ([`respond`]).
+//! incoming IM requests.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(async_fn_in_trait)]
@@ -50,7 +49,6 @@ use crate::error::{Error, ErrorCode};
 use crate::events::{EventReader, Events, DEFAULT_MAX_EVENTS_BUF_SIZE};
 use crate::invoker::HandlerInvoker;
 use crate::persist::KvBlobStoreAccess;
-use crate::respond::ExchangeHandler;
 use crate::subscriptions::{
     icd_max_int_secs, KeepAlive, ReportContext as SubscriptionReport, Subscriptions,
     SubscriptionsBuffers, DEFAULT_MAX_SUBSCRIPTIONS,
@@ -69,11 +67,16 @@ use crate::utils::timers::{Instant, Timer};
 
 // The dependencies, under the names the code uses for them
 use rs_matter_crypto as crypto;
+use rs_matter_dm_base as dm;
 use rs_matter_dm_base::persist;
-#[cfg(feature = "groups")]
-use rs_matter_node::groupcast;
-use rs_matter_node::{acl, dm, fabric, sc, transport, utils, Matter};
+use rs_matter_node::fabric;
+use rs_matter_sc::ExchangeInitiator as _;
 use rs_matter_tlv as tlv;
+use rs_matter_transport as transport;
+#[cfg(feature = "groups")]
+use rs_matter_transport::groupcast;
+use rs_matter_transport::{acl, Matter};
+use rs_matter_utils as utils;
 use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]
@@ -86,7 +89,7 @@ pub use expand::{expand_invoke, expand_read, expand_write};
 pub use report::*;
 pub use rs_matter_im_base as encoding;
 pub use rs_matter_im_base::*;
-pub use rs_matter_node::im::client;
+pub use rs_matter_transport::im::client;
 
 mod access;
 pub mod busy;
@@ -95,7 +98,6 @@ pub mod events;
 pub mod expand;
 pub mod invoker;
 mod report;
-pub mod respond;
 pub mod subscriptions;
 
 /// The ID of the General Diagnostics cluster, and of its `BootReason` event.
@@ -553,9 +555,10 @@ where
             // Disarm the failsafe on timeout
             let expiry = state.failsafe.check_failsafe_timeout(
                 &mut state.fabrics,
-                &mut state.sessions,
+                || {
+                    state.sessions.remove_pase(expire_sess_id);
+                },
                 &self.kv,
-                expire_sess_id,
                 &mut notify_mdns,
                 &mut notify_change,
             )?;
@@ -1556,20 +1559,6 @@ where
                 Ok(Some(OpCode::StatusResponse.into()))
             })
             .await
-    }
-}
-
-impl<C, B, T, K, R, const NS: usize, const NE: usize> ExchangeHandler
-    for InteractionModel<'_, C, B, T, K, R, NS, NE>
-where
-    C: Crypto,
-    B: Buffers<IMBuffer>,
-    T: DataModel,
-    K: KvBlobStoreAccess,
-    R: ReportDataHandler,
-{
-    async fn handle(&self, mut exchange: Exchange<'_>) -> Result<(), Error> {
-        InteractionModel::handle(self, &mut exchange).await
     }
 }
 

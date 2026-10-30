@@ -39,6 +39,7 @@ use core::num::NonZeroU8;
 use rs_matter::crypto::test_only_crypto;
 use rs_matter::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 use rs_matter::error::{Error, ErrorCode};
+use rs_matter::sc::ExchangeInitiator as _;
 use rs_matter::transport::exchange::Exchange;
 use rs_matter::transport::network::{Address, NetworkReceive, NetworkSend, NoNetwork};
 use rs_matter::transport::session::{

@@ -784,7 +784,7 @@ impl<'a> LitIcdMgmtHandler<'a> {
         let mut req = AccessReq::new(&accessor, path, Access::WRITE, &[]);
         req.set_target_perms(Access::WRITE | Access::NEED_ADMIN);
 
-        Ok(req.allow())
+        Ok(accessor.allow(&req))
     }
 
     /// Publish the current operating mode (and the slow poll it implies) to

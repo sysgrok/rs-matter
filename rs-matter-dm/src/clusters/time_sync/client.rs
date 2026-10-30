@@ -32,7 +32,7 @@
 //! ```ignore
 //! let client = TimeSyncClient::new(&matter, &crypto);
 //! let _ = client.run(
-//!     rs_matter_node::utils::timers::Duration::from_secs(60 * 60),
+//!     rs_matter_utils::timers::Duration::from_secs(60 * 60),
 //!     persist_access,
 //!     &dm,
 //! ).await;
@@ -50,6 +50,7 @@ use crate::dm::{AttrChangeNotifier, EventEmitter};
 use crate::error::Error;
 use crate::im::client::ImClient as _;
 use crate::persist::{KvBlobStoreAccess, Persist};
+use crate::sc::ExchangeInitiator as _;
 use crate::transport::exchange::Exchange;
 use crate::utils::futures::{select, Either};
 use crate::utils::timers::{Duration, Instant, Timer};

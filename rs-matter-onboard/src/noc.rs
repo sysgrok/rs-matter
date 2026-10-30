@@ -101,7 +101,7 @@ impl<'a> NocGenerator<'a> {
     ///
     /// Used identically at first-time bootstrap (with freshly-built
     /// chain bytes) and at restart (with chain bytes loaded from
-    /// [`rs_matter_node::fabric::Fabric`]).
+    /// `Fabric`).
     pub fn create(
         signing_privkey: CanonPkcSecretKeyRef<'a>,
         rcac: &[u8],

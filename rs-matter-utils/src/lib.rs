@@ -46,3 +46,7 @@ pub mod maybe;
 pub mod storage;
 pub mod sync;
 pub mod timers;
+#[cfg(feature = "zbus")]
+pub mod zbus;
+#[cfg(feature = "zbus")]
+pub mod zbus_proxies;

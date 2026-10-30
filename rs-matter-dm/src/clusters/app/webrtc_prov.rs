@@ -86,6 +86,7 @@ use crate::dm::{
     ReadContext,
 };
 use crate::error::{Error, ErrorCode};
+use crate::sc::ExchangeInitiator as _;
 use crate::tlv::{Nullable, TLVArray, TLVBuilderParent};
 use crate::transport::exchange::Exchange;
 use crate::transport::exchange::ExchangeIdExt as _;

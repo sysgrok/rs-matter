@@ -66,6 +66,7 @@ use rs_matter::onboard::{CommissionOptions, Commissioner};
 use rs_matter::persist::FABRIC_KEYS_START;
 use rs_matter::respond::DefaultResponder;
 use rs_matter::sc::pase::MAX_COMM_WINDOW_TIMEOUT_SECS;
+use rs_matter::sc::ExchangeInitiator as _;
 use rs_matter::transport::exchange::{Exchange, MatterBuffers};
 use rs_matter::transport::network::{Address, NetworkSend, NoNetwork, SocketAddr, SocketAddrV6};
 use rs_matter::utils::futures::{select, select3, Coalesce, Either};

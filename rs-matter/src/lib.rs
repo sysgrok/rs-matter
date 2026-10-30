@@ -40,20 +40,31 @@ extern crate alloc;
 
 pub mod dm;
 
-// The node: `Matter`, and the transport, the secure channel, the fabrics etc.
+// The state of the node: the fabrics, the fail-safe etc.
 pub use rs_matter_node::*;
 
-pub use rs_matter_im as im;
-pub use rs_matter_im::respond;
-pub use rs_matter_onboard as onboard;
+// `Matter` and the transport
+pub use rs_matter_transport as transport;
+#[cfg(feature = "groups")]
+pub use rs_matter_transport::groupcast;
+#[cfg(feature = "pics")]
+pub use rs_matter_transport::pics;
+pub use rs_matter_transport::{acl, BootReason, Matter, MatterState};
 
-pub use rs_matter_dm::{clusters, root_endpoint};
+pub use rs_matter_bdx as bdx;
+pub use rs_matter_im as im;
+pub use rs_matter_onboard as onboard;
+pub use rs_matter_respond as respond;
+pub use rs_matter_sc as sc;
+
+pub use rs_matter_dm::{clusters, ota, root_endpoint};
 
 pub use rs_matter_cert as cert;
 pub use rs_matter_cert::attest;
 pub use rs_matter_crypto as crypto;
 pub use rs_matter_crypto::group_keys;
 pub use rs_matter_pairing as pairing;
+pub use rs_matter_utils as utils;
 pub use rs_matter_utils::error;
 
 pub use rs_matter_dm_base::persist;

@@ -120,9 +120,15 @@ pub struct Rtc {
     trusted_time_source: Option<TrustedTimeSource>,
 }
 
+impl Default for Rtc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Rtc {
     #[inline(always)]
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             utc_us: FIRMWARE_BUILD_MATTER_US,
             utc_us_persisted: FIRMWARE_BUILD_MATTER_US,
