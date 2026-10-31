@@ -43,7 +43,7 @@ use crate::utils::sync::{MaybeSend, MaybeSendSync, Notification};
 use crate::{with, Matter};
 
 pub use crate::dm::clusters::decl::network_commissioning::*;
-pub use rs_matter_node::networks::{
+pub use rs_matter_node_base::networks::{
     load_networks, remove_networks, store_networks, DummyNetworks, Networks, NetworksError,
     WirelessCreds,
 };

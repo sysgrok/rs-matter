@@ -516,7 +516,7 @@ impl SessionEstTimeout {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use rs_matter_node::test_device::TEST_DEV_COMM;
+    use rs_matter_node_base::test_device::TEST_DEV_COMM;
 
     use crate::utils::timers::{Duration, Instant};
 

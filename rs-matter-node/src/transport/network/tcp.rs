@@ -57,7 +57,7 @@
 //! ```rust,ignore
 //! use std::net::TcpListener;
 //! use async_io::Async;
-//! use rs_matter_transport::network::tcp::TcpNetwork;
+//! use rs_matter_node::transport::network::tcp::TcpNetwork;
 //!
 //! let listener = Async::<TcpListener>::bind(([0, 0, 0, 0, 0, 0, 0, 0], 5540))?;
 //! let tcp = TcpNetwork::<8>::new(listener);

@@ -1636,7 +1636,7 @@ mod tests {
     use crate::transport::session::SessionMode;
     use crate::Matter;
     use futures_lite::future::block_on;
-    use rs_matter_node::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+    use rs_matter_node_base::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 
     fn test_matter() -> Matter<'static> {
         Matter::new(&TEST_DEV_DET, TEST_DEV_COMM, &TEST_DEV_ATT, 0)

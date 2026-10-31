@@ -13,16 +13,16 @@ rust-version.workspace = true
 
 [features]
 default = ["std", "log"]
-std = ["alloc", "rs-matter-utils/std", "rs-matter-crypto/std", "rs-matter-dm-base/std", "rs-matter-transport/std", "rs-matter-sc/std", "rs-matter-bdx/std", "rs-matter-im/std"]
-alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-crypto/alloc", "rs-matter-dm-base/alloc", "rs-matter-transport/alloc", "rs-matter-sc/alloc", "rs-matter-bdx/alloc", "rs-matter-im/alloc"]
-defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-crypto/defmt", "rs-matter-dm-base/defmt", "rs-matter-transport/defmt", "rs-matter-sc/defmt", "rs-matter-bdx/defmt", "rs-matter-im/defmt"]
-log = ["dep:log", "rs-matter-utils/log", "rs-matter-crypto/log", "rs-matter-dm-base/log", "rs-matter-transport/log", "rs-matter-sc/log", "rs-matter-bdx/log", "rs-matter-im/log"]
+std = ["alloc", "rs-matter-utils/std", "rs-matter-crypto/std", "rs-matter-dm-base/std", "rs-matter-node/std", "rs-matter-sc/std", "rs-matter-bdx/std", "rs-matter-im/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-crypto/alloc", "rs-matter-dm-base/alloc", "rs-matter-node/alloc", "rs-matter-sc/alloc", "rs-matter-bdx/alloc", "rs-matter-im/alloc"]
+defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-crypto/defmt", "rs-matter-dm-base/defmt", "rs-matter-node/defmt", "rs-matter-sc/defmt", "rs-matter-bdx/defmt", "rs-matter-im/defmt"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-crypto/log", "rs-matter-dm-base/log", "rs-matter-node/log", "rs-matter-sc/log", "rs-matter-bdx/log", "rs-matter-im/log"]
 
 [dependencies]
 rs-matter-utils = { workspace = true }
 rs-matter-crypto = { workspace = true }
 rs-matter-dm-base = { workspace = true }
-rs-matter-transport = { workspace = true }
+rs-matter-node = { workspace = true }
 rs-matter-sc = { workspace = true }
 rs-matter-bdx = { workspace = true }
 rs-matter-im = { workspace = true }

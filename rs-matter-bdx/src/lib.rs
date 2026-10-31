@@ -49,12 +49,12 @@ use crate::transport::{MAX_RX_PAYLOAD_SIZE, MAX_TX_PAYLOAD_SIZE};
 use crate::utils::storage::{ReadBuf, WriteBuf};
 
 // The dependencies, under the names the code uses for them
-use rs_matter_transport as transport;
-use rs_matter_transport::sc;
+use rs_matter_node::sc;
+use rs_matter_node::transport;
 use rs_matter_utils as utils;
 use rs_matter_utils::error;
 
-pub use rs_matter_transport::bdx::*;
+pub use rs_matter_node::bdx::*;
 
 // This mod MUST go first, so that the others see its macros.
 pub(crate) mod fmt;

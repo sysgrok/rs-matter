@@ -19,8 +19,8 @@ on:
         - rs-matter-im-base
         - rs-matter-dm-base
         - rs-matter-dm-clusters
+        - rs-matter-node-base
         - rs-matter-node
-        - rs-matter-transport
         - rs-matter-sc
         - rs-matter-bdx
         - rs-matter-im

@@ -27,7 +27,7 @@ use crate::utils::storage::Vec;
 
 use super::{WirelessNetwork, WirelessNetworks};
 
-pub use rs_matter_node::networks::ThreadTLV;
+pub use rs_matter_node_base::networks::ThreadTLV;
 
 pub type ThreadNetworks<const N: usize> = WirelessNetworks<N, Thread>;
 

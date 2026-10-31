@@ -24,7 +24,7 @@ use crate::cert::MAX_CERT_TLV_LEN;
 
 pub use initiator::CaseInitiator;
 pub use responder::CaseResponder;
-pub use rs_matter_transport::sc::case::*;
+pub use rs_matter_node::sc::case::*;
 
 pub(crate) mod casep;
 mod initiator;

@@ -44,7 +44,7 @@ use crate::utils::storage::{ParseBuf, Vec, WriteBuf};
 use crate::utils::timers::{Duration, Instant};
 use crate::{Matter, MatterState};
 
-pub use rs_matter_node::session::*;
+pub use rs_matter_node_base::session::*;
 
 #[cfg(feature = "groups")]
 use super::dedup::GroupCtrStore;
@@ -2622,7 +2622,7 @@ mod tests {
     fn test_group_data_ctr_resumes_from_storage() {
         use crate::persist::GROUP_DATA_COUNTER_KEY;
         use crate::Matter;
-        use rs_matter_node::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+        use rs_matter_node_base::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 
         /// The previous run's stored boundary.
         const STORED: u32 = 5000;
@@ -2664,7 +2664,7 @@ mod tests {
     fn test_group_data_ctr_factory_reset() {
         use crate::persist::GROUP_DATA_COUNTER_KEY;
         use crate::Matter;
-        use rs_matter_node::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+        use rs_matter_node_base::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 
         let mut kv = MemKv(std::collections::HashMap::new());
         kv.0.insert(GROUP_DATA_COUNTER_KEY, 5000u32.to_le_bytes().to_vec());

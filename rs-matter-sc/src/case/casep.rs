@@ -46,7 +46,7 @@ const SIGMA3_NONCE: AeadNonceRef = AeadNonceRef::new(&[
     0x4e, 0x43, 0x41, 0x53, 0x45, 0x5f, 0x53, 0x69, 0x67, 0x6d, 0x61, 0x33, 0x4e,
 ]);
 
-pub use rs_matter_transport::sc::case::{
+pub use rs_matter_node::sc::case::{
     CaseResumptionId, CaseResumptionIdRef, CASE_RESUMPTION_ID_LEN, CASE_RESUMPTION_ID_ZEROED,
 };
 

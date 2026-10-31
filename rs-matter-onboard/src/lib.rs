@@ -89,10 +89,10 @@ use rs_matter_dm_clusters::operational_credentials::{
 use rs_matter_cert as cert;
 use rs_matter_crypto as crypto;
 use rs_matter_dm_base as dm;
+use rs_matter_node::transport;
+use rs_matter_node::Matter;
 use rs_matter_sc::ExchangeInitiator as _;
 use rs_matter_tlv as tlv;
-use rs_matter_transport as transport;
-use rs_matter_transport::Matter;
 use rs_matter_utils::error;
 
 #[cfg(feature = "alloc")]

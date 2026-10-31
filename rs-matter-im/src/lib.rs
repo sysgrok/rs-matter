@@ -69,13 +69,13 @@ use crate::utils::timers::{Instant, Timer};
 use rs_matter_crypto as crypto;
 use rs_matter_dm_base as dm;
 use rs_matter_dm_base::persist;
-use rs_matter_node::fabric;
+#[cfg(feature = "groups")]
+use rs_matter_node::groupcast;
+use rs_matter_node::transport;
+use rs_matter_node::{acl, Matter};
+use rs_matter_node_base::fabric;
 use rs_matter_sc::ExchangeInitiator as _;
 use rs_matter_tlv as tlv;
-use rs_matter_transport as transport;
-#[cfg(feature = "groups")]
-use rs_matter_transport::groupcast;
-use rs_matter_transport::{acl, Matter};
 use rs_matter_utils as utils;
 use rs_matter_utils::error;
 
@@ -89,7 +89,7 @@ pub use expand::{expand_invoke, expand_read, expand_write};
 pub use report::*;
 pub use rs_matter_im_base as encoding;
 pub use rs_matter_im_base::*;
-pub use rs_matter_transport::im::client;
+pub use rs_matter_node::im::client;
 
 mod access;
 pub mod busy;

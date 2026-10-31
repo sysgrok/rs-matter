@@ -17,7 +17,7 @@
 
 //! What the node state needs to know about sessions: who is on the other end of
 //! a session and how many sessions there are. The sessions themselves are in
-//! `rs-matter-transport`.
+//! `rs-matter-node`.
 
 use core::num::NonZeroU8;
 

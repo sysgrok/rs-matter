@@ -42,7 +42,7 @@ pub const MAX_RX_LARGE_PACKET_SIZE: usize = 1024 * 1024;
 // Maximum TCP TX packet size per Matter spec
 pub const MAX_TX_LARGE_PACKET_SIZE: usize = MAX_RX_LARGE_PACKET_SIZE;
 
-pub use rs_matter_node::service::MatterLocalService;
+pub use rs_matter_node_base::service::MatterLocalService;
 
 /// A Matter service **elsewhere** that this node resolves / looks up over a
 /// discovery transport such as mDNS.

@@ -13,10 +13,10 @@ rust-version.workspace = true
 
 [features]
 default = ["std", "log"]
-std = ["alloc", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-cert/std", "rs-matter-im-base/std", "rs-matter-dm-base/std", "rs-matter-dm-clusters/std", "rs-matter-transport/std", "rs-matter-sc/std"]
-alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-cert/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc", "rs-matter-dm-clusters/alloc", "rs-matter-transport/alloc", "rs-matter-sc/alloc"]
-defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-cert/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt", "rs-matter-dm-clusters/defmt", "rs-matter-transport/defmt", "rs-matter-sc/defmt"]
-log = ["dep:log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-cert/log", "rs-matter-im-base/log", "rs-matter-dm-base/log", "rs-matter-dm-clusters/log", "rs-matter-transport/log", "rs-matter-sc/log"]
+std = ["alloc", "rs-matter-utils/std", "rs-matter-tlv/std", "rs-matter-crypto/std", "rs-matter-cert/std", "rs-matter-im-base/std", "rs-matter-dm-base/std", "rs-matter-dm-clusters/std", "rs-matter-node/std", "rs-matter-sc/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-tlv/alloc", "rs-matter-crypto/alloc", "rs-matter-cert/alloc", "rs-matter-im-base/alloc", "rs-matter-dm-base/alloc", "rs-matter-dm-clusters/alloc", "rs-matter-node/alloc", "rs-matter-sc/alloc"]
+defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-tlv/defmt", "rs-matter-crypto/defmt", "rs-matter-cert/defmt", "rs-matter-im-base/defmt", "rs-matter-dm-base/defmt", "rs-matter-dm-clusters/defmt", "rs-matter-node/defmt", "rs-matter-sc/defmt"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-tlv/log", "rs-matter-crypto/log", "rs-matter-cert/log", "rs-matter-im-base/log", "rs-matter-dm-base/log", "rs-matter-dm-clusters/log", "rs-matter-node/log", "rs-matter-sc/log"]
 
 [dependencies]
 rs-matter-utils = { workspace = true }
@@ -26,7 +26,7 @@ rs-matter-cert = { workspace = true }
 rs-matter-im-base = { workspace = true }
 rs-matter-dm-base = { workspace = true }
 rs-matter-dm-clusters = { workspace = true }
-rs-matter-transport = { workspace = true }
+rs-matter-node = { workspace = true }
 rs-matter-sc = { workspace = true }
 log = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }

@@ -1,6 +1,6 @@
 /*
  *
- *    Copyright (c) 2026 Project CHIP Authors
+ *    Copyright (c) 2022-2026 Project CHIP Authors
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -15,9 +15,9 @@
  *    limitations under the License.
  */
 
-//! The Matter transport (exchanges, sessions, MRP, UDP, TCP, BTP and mDNS), the
-//! [`Matter`] object which holds it together with the state of the node, and
-//! what is built directly on `Exchange`: the `Accessor` and the IM client.
+//! The state of a Matter node, as far as it does not depend on how the node
+//! talks to others: the fabrics, the ACL, the fail-safe, the basic information
+//! settings, the networks, the clock and the ICD advertisement.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(async_fn_in_trait)]
 #![allow(unknown_lints)]
@@ -34,29 +34,31 @@ extern crate alloc;
 pub(crate) mod fmt;
 
 pub mod acl;
-pub mod bdx;
-#[cfg(feature = "groups")]
-pub mod groupcast;
-pub mod im;
-mod matter;
-#[cfg(feature = "pics")]
-pub mod pics;
-pub mod sc;
-mod transport;
+pub mod basic_info;
+pub mod fabric;
+pub mod failsafe;
+pub mod handover;
+pub mod icd;
+pub mod networks;
+pub mod rtc;
+pub mod service;
+pub mod session;
+pub mod test_device;
 
 // The dependencies, under the names the code uses for them
+use rs_matter_cert as cert;
 use rs_matter_cert::attest;
 use rs_matter_crypto as crypto;
-#[cfg(feature = "groups")]
 use rs_matter_crypto::group_keys;
 use rs_matter_dm_base as dm;
 use rs_matter_dm_base::persist;
-use rs_matter_node::{basic_info, fabric, failsafe, handover, icd, networks, rtc};
+use rs_matter_im_base as im;
 use rs_matter_pairing as pairing;
 use rs_matter_tlv as tlv;
 use rs_matter_utils as utils;
 use rs_matter_utils::error;
 
-pub use matter::*;
-pub use rs_matter_node::{BasicCommData, MATTER_PORT};
-pub use transport::*;
+pub use crate::pairing::BasicCommData;
+
+/// The Matter UDP port
+pub const MATTER_PORT: u16 = 5540;

@@ -149,6 +149,6 @@ jobs:
           cargo miri test --lib -p rs-matter-utils -p rs-matter-tlv -p rs-matter-im-base -p rs-matter-dm
           cargo miri test --lib -p rs-matter-dm-base -- --skip persist::
           cargo miri test --lib -p rs-matter-im
-          cargo miri test --lib -p rs-matter-node -- basic_info:: rtc::
-          cargo miri test --lib -p rs-matter-transport -- im:: transport::
+          cargo miri test --lib -p rs-matter-node-base -- basic_info:: rtc::
+          cargo miri test --lib -p rs-matter-node -- im:: transport::
           cargo miri test --lib -p rs-matter-cert -- der_utils::

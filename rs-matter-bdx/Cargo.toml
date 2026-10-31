@@ -13,14 +13,14 @@ rust-version.workspace = true
 
 [features]
 default = ["std", "log"]
-std = ["alloc", "rs-matter-utils/std", "rs-matter-transport/std"]
-alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-transport/alloc"]
-defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-transport/defmt"]
-log = ["dep:log", "rs-matter-utils/log", "rs-matter-transport/log"]
+std = ["alloc", "rs-matter-utils/std", "rs-matter-node/std"]
+alloc = ["defmt?/alloc", "rs-matter-utils/alloc", "rs-matter-node/alloc"]
+defmt = ["dep:defmt", "rs-matter-utils/defmt", "rs-matter-node/defmt"]
+log = ["dep:log", "rs-matter-utils/log", "rs-matter-node/log"]
 
 [dependencies]
 rs-matter-utils = { workspace = true }
-rs-matter-transport = { workspace = true }
+rs-matter-node = { workspace = true }
 num = { workspace = true }
 num-derive = { workspace = true }
 num-traits = { workspace = true }

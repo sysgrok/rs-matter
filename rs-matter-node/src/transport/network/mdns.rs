@@ -1286,7 +1286,7 @@ mod tests {
     /// its slow poll, a non-ICD one nothing.
     #[test]
     fn sii_follows_the_icd_slow_poll() {
-        use rs_matter_node::test_device::TEST_DEV_DET;
+        use rs_matter_node_base::test_device::TEST_DEV_DET;
 
         let configured = BasicInfoConfig {
             sai: Some(300),
@@ -1338,7 +1338,7 @@ mod tests {
     /// services; a non-ICD device omits the key.
     #[test]
     fn sat_is_advertised_by_an_icd() {
-        use rs_matter_node::test_device::TEST_DEV_DET;
+        use rs_matter_node_base::test_device::TEST_DEV_DET;
 
         let mut buf = [0u8; 512];
 

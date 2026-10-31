@@ -37,13 +37,13 @@ use rs_matter_crypto as crypto;
 use rs_matter_crypto::group_keys;
 use rs_matter_dm_base::persist;
 use rs_matter_dm_base::{except, handler_chain_type, with};
-use rs_matter_node::{basic_info, fabric, icd, rtc};
+#[cfg(feature = "groups")]
+use rs_matter_node::groupcast;
+use rs_matter_node::transport;
+use rs_matter_node::{acl, im, BootReason, Matter, MatterState};
+use rs_matter_node_base::{basic_info, fabric, icd, rtc};
 use rs_matter_sc as sc;
 use rs_matter_tlv as tlv;
-use rs_matter_transport as transport;
-#[cfg(feature = "groups")]
-use rs_matter_transport::groupcast;
-use rs_matter_transport::{acl, im, BootReason, Matter, MatterState};
 use rs_matter_utils as utils;
 use rs_matter_utils::error;
 

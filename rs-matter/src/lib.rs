@@ -41,15 +41,15 @@ extern crate alloc;
 pub mod dm;
 
 // The state of the node: the fabrics, the fail-safe etc.
-pub use rs_matter_node::*;
+pub use rs_matter_node_base::*;
 
 // `Matter` and the transport
-pub use rs_matter_transport as transport;
 #[cfg(feature = "groups")]
-pub use rs_matter_transport::groupcast;
+pub use rs_matter_node::groupcast;
 #[cfg(feature = "pics")]
-pub use rs_matter_transport::pics;
-pub use rs_matter_transport::{acl, BootReason, Matter, MatterState};
+pub use rs_matter_node::pics;
+pub use rs_matter_node::transport;
+pub use rs_matter_node::{acl, BootReason, Matter, MatterState};
 
 pub use rs_matter_bdx as bdx;
 pub use rs_matter_im as im;

@@ -246,7 +246,7 @@ mod tests {
     use crate::dm::{Endpoint, Node};
     use crate::utils::storage::String;
     use crate::Matter;
-    use rs_matter_node::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+    use rs_matter_node_base::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 
     static NODE: Node = Node::new(&[Endpoint::new(
         1,

@@ -10,8 +10,8 @@ members = [
         "rs-matter-im-base",
         "rs-matter-dm-base",
         "rs-matter-dm-clusters",
+        "rs-matter-node-base",
         "rs-matter-node",
-        "rs-matter-transport",
         "rs-matter-sc",
         "rs-matter-bdx",
         "rs-matter-im",
@@ -71,8 +71,8 @@ rs-matter-pairing = { path = "rs-matter-pairing", version = "0.4.1", default-fea
 rs-matter-im-base = { path = "rs-matter-im-base", version = "0.4.1", default-features = false }
 rs-matter-dm-base = { path = "rs-matter-dm-base", version = "0.4.1", default-features = false }
 rs-matter-dm-clusters = { path = "rs-matter-dm-clusters", version = "0.4.1", default-features = false }
+rs-matter-node-base = { path = "rs-matter-node-base", version = "0.4.1", default-features = false }
 rs-matter-node = { path = "rs-matter-node", version = "0.4.1", default-features = false }
-rs-matter-transport = { path = "rs-matter-transport", version = "0.4.1", default-features = false }
 rs-matter-sc = { path = "rs-matter-sc", version = "0.4.1", default-features = false }
 rs-matter-bdx = { path = "rs-matter-bdx", version = "0.4.1", default-features = false }
 rs-matter-im = { path = "rs-matter-im", version = "0.4.1", default-features = false }

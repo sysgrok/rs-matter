@@ -1240,9 +1240,9 @@ pub mod test {
 
     pub fn test_matter() -> Matter<'static> {
         Matter::new(
-            &rs_matter_node::test_device::TEST_DEV_DET,
-            rs_matter_node::test_device::TEST_DEV_COMM,
-            &rs_matter_node::test_device::TEST_DEV_ATT,
+            &rs_matter_node_base::test_device::TEST_DEV_DET,
+            rs_matter_node_base::test_device::TEST_DEV_COMM,
+            &rs_matter_node_base::test_device::TEST_DEV_ATT,
             0,
         )
     }

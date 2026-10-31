@@ -25,7 +25,7 @@ use crate::SessionParameters;
 
 pub use initiator::PaseInitiator;
 pub use responder::PaseResponder;
-pub use rs_matter_transport::sc::pase::*;
+pub use rs_matter_node::sc::pase::*;
 
 mod initiator;
 mod responder;

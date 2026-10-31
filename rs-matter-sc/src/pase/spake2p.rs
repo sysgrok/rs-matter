@@ -35,7 +35,7 @@ use crate::error::{Error, ErrorCode};
 use crate::utils::init::{init, Init};
 use crate::SCStatusCodes;
 
-pub use rs_matter_transport::sc::pase::spake2p::*;
+pub use rs_matter_node::sc::pase::spake2p::*;
 
 pub const SPAKE2P_KE_LEN: usize = 16;
 

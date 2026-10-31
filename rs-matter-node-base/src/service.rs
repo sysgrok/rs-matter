@@ -20,7 +20,7 @@
 ///
 /// This is the *publish-side* identity; the *query-side* analog is
 /// `MatterRemoteService`. The discovery-transport encoding (e.g. the mDNS
-/// `MdnsLocalService` record) lives in the `mdns` module of `rs-matter-transport`
+/// `MdnsLocalService` record) lives in the `mdns` module of `rs-matter-node`
 /// (`MatterLocalService::service`).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

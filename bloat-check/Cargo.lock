@@ -3357,12 +3357,12 @@ dependencies = [
  "rs-matter-im",
  "rs-matter-im-base",
  "rs-matter-node",
+ "rs-matter-node-base",
  "rs-matter-onboard",
  "rs-matter-pairing",
  "rs-matter-respond",
  "rs-matter-sc",
  "rs-matter-tlv",
- "rs-matter-transport",
  "rs-matter-utils",
  "strum 0.28.0",
 ]
@@ -3376,7 +3376,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
- "rs-matter-transport",
+ "rs-matter-node",
  "rs-matter-utils",
 ]
 
@@ -3489,9 +3489,9 @@ dependencies = [
  "rs-matter-dm-clusters",
  "rs-matter-im-base",
  "rs-matter-node",
+ "rs-matter-node-base",
  "rs-matter-sc",
  "rs-matter-tlv",
- "rs-matter-transport",
  "rs-matter-utils",
  "scopeguard",
 ]
@@ -3537,9 +3537,9 @@ dependencies = [
  "rs-matter-dm-base",
  "rs-matter-im-base",
  "rs-matter-node",
+ "rs-matter-node-base",
  "rs-matter-sc",
  "rs-matter-tlv",
- "rs-matter-transport",
  "rs-matter-utils",
 ]
 
@@ -3574,6 +3574,31 @@ dependencies = [
  "bitflags 2.13.2",
  "cfg-if",
  "defmt 1.1.1",
+ "domain",
+ "either",
+ "log",
+ "nix 0.31.3",
+ "num",
+ "num-derive",
+ "num-traits",
+ "rand_core 0.10.1",
+ "rs-matter-cert",
+ "rs-matter-crypto",
+ "rs-matter-dm-base",
+ "rs-matter-im-base",
+ "rs-matter-node-base",
+ "rs-matter-pairing",
+ "rs-matter-tlv",
+ "rs-matter-utils",
+]
+
+[[package]]
+name = "rs-matter-node-base"
+version = "0.4.1"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "defmt 1.1.1",
  "log",
  "num",
  "num-derive",
@@ -3598,9 +3623,9 @@ dependencies = [
  "rs-matter-dm-base",
  "rs-matter-dm-clusters",
  "rs-matter-im-base",
+ "rs-matter-node",
  "rs-matter-sc",
  "rs-matter-tlv",
- "rs-matter-transport",
  "rs-matter-utils",
 ]
 
@@ -3627,8 +3652,8 @@ dependencies = [
  "rs-matter-crypto",
  "rs-matter-dm-base",
  "rs-matter-im",
+ "rs-matter-node",
  "rs-matter-sc",
- "rs-matter-transport",
  "rs-matter-utils",
 ]
 
@@ -3644,8 +3669,8 @@ dependencies = [
  "rs-matter-crypto",
  "rs-matter-dm-base",
  "rs-matter-node",
+ "rs-matter-node-base",
  "rs-matter-tlv",
- "rs-matter-transport",
  "rs-matter-utils",
  "subtle",
 ]
@@ -3661,31 +3686,6 @@ dependencies = [
  "num-traits",
  "pinned-init",
  "rs-matter-macros",
- "rs-matter-utils",
-]
-
-[[package]]
-name = "rs-matter-transport"
-version = "0.4.1"
-dependencies = [
- "bitflags 2.13.2",
- "cfg-if",
- "defmt 1.1.1",
- "domain",
- "either",
- "log",
- "nix 0.31.3",
- "num",
- "num-derive",
- "num-traits",
- "rand_core 0.10.1",
- "rs-matter-cert",
- "rs-matter-crypto",
- "rs-matter-dm-base",
- "rs-matter-im-base",
- "rs-matter-node",
- "rs-matter-pairing",
- "rs-matter-tlv",
  "rs-matter-utils",
 ]
 

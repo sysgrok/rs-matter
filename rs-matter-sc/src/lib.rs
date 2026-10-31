@@ -59,16 +59,16 @@ pub mod pase;
 use rs_matter_cert as cert;
 use rs_matter_crypto as crypto;
 use rs_matter_dm_base as dm;
-use rs_matter_node::{fabric, failsafe};
+use rs_matter_node::im;
+use rs_matter_node::transport;
+use rs_matter_node::Matter;
+use rs_matter_node_base::{fabric, failsafe};
 use rs_matter_tlv as tlv;
-use rs_matter_transport as transport;
-use rs_matter_transport::im;
-use rs_matter_transport::Matter;
 use rs_matter_utils as utils;
 use rs_matter_utils::error;
 
 pub use initiate::ExchangeInitiator;
-pub use rs_matter_transport::sc::*;
+pub use rs_matter_node::sc::*;
 
 #[cfg(feature = "alloc")]
 #[macro_export]
@@ -291,12 +291,12 @@ mod tests {
     use crate::im::IM_REVISION;
     use crate::transport::mrp::MRP_BASE_RETRY_INTERVAL_MS;
     use crate::Matter;
-    use rs_matter_node::basic_info::{
+    use rs_matter_node_base::basic_info::{
         BasicInfoConfig, DEFAULT_DATA_MODEL_REVISION, DEFAULT_MATTER_SPEC_VERSION,
         DEFAULT_MAX_PATHS_PER_INVOKE,
     };
-    use rs_matter_node::icd::{IcdAdvertisement, IcdOperatingMode};
-    use rs_matter_node::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+    use rs_matter_node_base::icd::{IcdAdvertisement, IcdOperatingMode};
+    use rs_matter_node_base::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 
     /// The session parameters a node sends always carry the fields the spec
     /// requires: the revisions, the max paths per invoke and - because those
