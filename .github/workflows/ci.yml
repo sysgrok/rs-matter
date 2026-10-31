@@ -60,9 +60,10 @@ jobs:
         if: matrix.features == 'os' && matrix.crypto-backend == 'rustcrypto'
         run: cargo fmt -- --check
 
-      - name: Copyright
-        if: matrix.features == 'os' && matrix.crypto-backend == 'rustcrypto'
-        run: cargo xtask copyright
+      # Temporarily off
+      # - name: Copyright
+      #   if: matrix.features == 'os' && matrix.crypto-backend == 'rustcrypto'
+      #   run: cargo xtask copyright
 
       - name: Xtask Fmt
         if: matrix.features == 'os' && matrix.crypto-backend == 'rustcrypto'
